@@ -1,4 +1,4 @@
-import { checkArgonEligibility, type ModelQuota, type QuotaGroup } from '../types/account';
+import { type ModelQuota, type QuotaGroup } from '../types/account';
 import { isArgonModel, extractGemini4Codename, isDedicatedG4Group } from './modelCategory';
 
 export type DashboardQuotaView = 'weighted' | '5h' | 'weekly';
@@ -382,9 +382,7 @@ export function getGroupQuotaSummaries(
             const matched = fallbackModels.filter(m => {
                 const n = (m?.name || '').toLowerCase();
                 if (!isSupportedDisplayModel(n) || (m as any)?.disabled) return false;
-                const isArgon = isArgonModel(n);
-                if (key === 'argon') return isArgon;
-                if (isArgon) return false;
+                if (key === 'argon') return isArgonModel(n);
                 return key === 'claude' ? (n.startsWith('claude') || n.startsWith('gpt')) : n.startsWith('gemini');
             });
 
@@ -466,9 +464,7 @@ export function getGroupQuotaSummaries(
         const matchedForSummary = fallbackModels.filter(m => {
             const n = (m?.name || '').toLowerCase();
             if (!isSupportedDisplayModel(n) || (m as any)?.disabled) return false;
-            const isArgon = isArgonModel(n);
-            if (key === 'argon') return isArgon;
-            if (isArgon) return false;
+            if (key === 'argon') return isArgonModel(n);
             return key === 'claude' ? (n.startsWith('claude') || n.startsWith('gpt')) : n.startsWith('gemini');
         });
         const { dynamicLabel, supportedModels } = summarizeSupportedModels(matchedForSummary, key);
@@ -524,18 +520,10 @@ export function getGroupQuotaSummaries(
         };
     };
 
-    // 使用统一收敛判据：综合校验 Ultra 旗舰套餐、Pro 独立分组套餐与 Free 隔离防呆
-    const hasArgon = checkArgonEligibility(groups, fallbackModels, tier);
-
-    const summaries: GroupQuotaSummary[] = [
+    // 仅返回 Gemini 与 Claude 核心分组（各自含 5H 滚动配额与 7 天周配额，共 4 个条）
+    return [
         buildGroup('gemini'),
         buildGroup('claude'),
     ];
-
-    if (hasArgon) {
-        summaries.push(buildGroup('argon'));
-    }
-
-    return summaries;
 }
 

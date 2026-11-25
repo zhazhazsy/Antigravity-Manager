@@ -5,7 +5,6 @@ import {
     ArrowRight, Check, ChevronDown, Shuffle, Power, Feather, Copy, Pin, X,
     Sparkles, Bot
 } from 'lucide-react';
-import { Gemini } from '../common/BrandIcons';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -21,7 +20,6 @@ import {
 import { getAccountTier, type Account } from '../../types/account';
 import { isAccountAbnormal } from '../../utils/accountStatus';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
-import { isArgonModel } from '../../utils/modelCategory';
 import { GroupQuotaCard } from '../accounts/GroupQuotaCard';
 import { useConfigStore } from '../../stores/useConfigStore';
 
@@ -216,15 +214,12 @@ export default function MiniView() {
         );
     }, [displayedAccount, tier]);
 
-    const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
+    const isGroupProtected = (key: 'gemini' | 'claude') => {
         if (!displayedAccount?.protected_models || displayedAccount.protected_models.length === 0)
             return false;
-        if (key === 'argon') {
-            return displayedAccount.protected_models.some(isArgonModel);
-        }
         if (key === 'gemini') {
             return displayedAccount.protected_models.some(
-                (m: string) => m.toLowerCase().includes('gemini') && !isArgonModel(m)
+                (m: string) => m.toLowerCase().includes('gemini')
             );
         }
         return displayedAccount.protected_models.some(
@@ -375,7 +370,7 @@ export default function MiniView() {
     };
 
     const poolMetrics = useMemo(() => {
-        const calculateGroupMetrics = (target: 'gemini' | 'claude' | 'argon') => {
+        const calculateGroupMetrics = (target: 'gemini' | 'claude') => {
             if (activePool.length === 0) {
                 return {
                     percentage: 0,
@@ -491,7 +486,6 @@ export default function MiniView() {
         return {
             gemini: calculateGroupMetrics('gemini'),
             claude: calculateGroupMetrics('claude'),
-            argon: calculateGroupMetrics('argon'),
         };
     }, [activePool, quotaView]);
 
@@ -788,12 +782,6 @@ export default function MiniView() {
                                     'cyan',
                                     <Bot className="w-3.5 h-3.5 text-cyan-500 shrink-0" />
                                 )}
-                                {poolMetrics.argon && poolMetrics.argon.count > 0 && renderPoolMetricRow(
-                                    'Gemini 4 Argon',
-                                    poolMetrics.argon,
-                                    'purple',
-                                    <Gemini.Color className="w-3.5 h-3.5 shrink-0" />
-                                )}
                             </div>
                         </div>
                     )
@@ -974,34 +962,20 @@ export default function MiniView() {
                             </div>
                         </div>
 
-                        {/* 配额胶囊条：直接复用首页 GroupQuotaCard 规范 */}
+                        {/* 配额胶囊条：直接复用首页 GroupQuotaCard 规范（仅展示 Gemini 与 Claude 双窗口共 4 个条） */}
                         <div className="flex flex-col gap-1.5">
-                            {groupSummaries
-                                .filter((s) => s.key !== 'argon')
-                                .map((summary) => (
-                                    <GroupQuotaCard
-                                        key={summary.key}
-                                        summary={summary}
-                                        isProtected={isGroupProtected(summary.key)}
-                                        liveLimit={
-                                            summary.key === 'gemini'
-                                                ? getLiveLimitForModel(displayedAccount, 'gemini-pro')
-                                                : getLiveLimitForModel(displayedAccount, 'claude')
-                                        }
-                                    />
-                                ))}
-                            {(() => {
-                                const argon = groupSummaries.find((s) => s.key === 'argon');
-                                if (!argon) return null;
-                                return (
-                                    <GroupQuotaCard
-                                        summary={argon}
-                                        isProtected={isGroupProtected('argon')}
-                                        liveLimit={getLiveLimitForModel(displayedAccount, 'gemini-4-argon')}
-                                        fullWidth
-                                    />
-                                );
-                            })()}
+                            {groupSummaries.map((summary) => (
+                                <GroupQuotaCard
+                                    key={summary.key}
+                                    summary={summary}
+                                    isProtected={isGroupProtected(summary.key === 'gemini' ? 'gemini' : 'claude')}
+                                    liveLimit={
+                                        summary.key === 'gemini'
+                                            ? getLiveLimitForModel(displayedAccount, 'gemini-pro')
+                                            : getLiveLimitForModel(displayedAccount, 'claude')
+                                    }
+                                />
+                            ))}
                             {groupSummaries.length === 0 && (
                                 <div className="text-center py-4 text-xs text-gray-400">
                                     {t('dashboard.no_quota_data', '暂无配额数据')}

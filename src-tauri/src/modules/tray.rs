@@ -120,6 +120,151 @@ pub fn hide_mini_window(app: &tauri::AppHandle) {
     }
 }
 
+/// 切入迷你悬浮窗前自动隐藏（或按轻量模式销毁）主控制台窗口
+pub fn hide_main_window_for_mini(app: &tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let is_lightweight = crate::modules::load_app_config()
+            .map(|c| c.lightweight_mode)
+            .unwrap_or(false);
+
+        if is_lightweight {
+            let _ = crate::modules::lightweight::enter_lightweight_mode(app);
+        } else if let Some(main_win) = app.get_webview_window("main") {
+            let _ = main_win.hide();
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+        }
+    }
+}
+
+/// 隐藏主窗口并唤醒聚焦 Mini 悬浮视窗（确保切换至悬浮窗时主窗口同步收起）
+pub fn open_mini_window(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, rect);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        // 先隐藏或销毁主窗口再聚焦 mini，防止跨窗口焦点抢占触发 mini 失焦自动收起
+        hide_main_window_for_mini(app);
+
+        let window = match ensure_mini_window(app) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!("[Tray] 无法获取或重建 mini 悬浮窗: {}", e);
+                return;
+            }
+        };
+
+        const MINI_WIDTH: f64 = 360.0;
+        const MINI_HEIGHT: f64 = 360.0;
+
+        let already_visible = window.is_visible().unwrap_or(false);
+
+        let _ = window.set_decorations(false);
+        let _ = window.set_resizable(false);
+        let _ = window.set_shadow(true);
+        let _ = window.set_always_on_top(is_mini_view_pinned());
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            MINI_WIDTH,
+            MINI_HEIGHT,
+        )));
+
+        if rect.is_some() || !already_visible {
+            let monitor = window.current_monitor().ok().flatten();
+            let (mon_x, mon_y, mon_w, mon_h, scale_factor) = if let Some(ref m) = monitor {
+                let pos = m.position();
+                let sz = m.size();
+                let sf = m.scale_factor();
+                (
+                    pos.x as f64,
+                    pos.y as f64,
+                    sz.width as f64,
+                    sz.height as f64,
+                    sf,
+                )
+            } else {
+                (0.0, 0.0, 1920.0, 1080.0, 1.0)
+            };
+
+            let physical_w = MINI_WIDTH * scale_factor;
+            let physical_h = MINI_HEIGHT * scale_factor;
+
+            let (mut win_x, mut win_y) = if let Some(r) = rect {
+                let (tray_x, tray_y) = match r.position {
+                    tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                    tauri::Position::Logical(p) => (p.x * scale_factor, p.y * scale_factor),
+                };
+                let (tray_w, tray_h) = match r.size {
+                    tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
+                    tauri::Size::Logical(s) => (s.width * scale_factor, s.height * scale_factor),
+                };
+
+                // 水平居中对齐托盘图标
+                let x = tray_x + (tray_w / 2.0) - (physical_w / 2.0);
+
+                // 垂直定位：跨平台适配（判断处于屏幕上半部分如 macOS 顶部菜单栏/Linux 顶栏，还是下半部分如 Windows 底部任务栏）
+                let y = if tray_y > mon_y + (mon_h / 2.0) {
+                    // Windows 底部任务栏 / Linux 底部 Dock：窗口向上弹出
+                    tray_y - physical_h - (4.0 * scale_factor)
+                } else {
+                    // macOS 顶部菜单栏 / Windows 顶部任务栏：窗口向下弹出
+                    tray_y + tray_h + (4.0 * scale_factor)
+                };
+
+                (x, y)
+            } else {
+                // 无托盘坐标时，默认优雅居中于主屏顶部下方
+                (
+                    mon_x + (mon_w - physical_w) / 2.0,
+                    mon_y + 40.0 * scale_factor,
+                )
+            };
+
+            // 四边屏幕边缘安全吸附限制（留出 8px 边距）
+            let margin = 8.0 * scale_factor;
+            if win_x < mon_x + margin {
+                win_x = mon_x + margin;
+            }
+            if win_x + physical_w > mon_x + mon_w - margin {
+                win_x = mon_x + mon_w - physical_w - margin;
+            }
+            if win_y < mon_y + margin {
+                win_y = mon_y + margin;
+            }
+            if win_y + physical_h > mon_y + mon_h - margin {
+                win_y = mon_y + mon_h - physical_h - margin;
+            }
+
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                win_x as i32,
+                win_y as i32,
+            )));
+        }
+
+        // macOS 专属策略：唤起 Mini 视窗时，始终切换为 Accessory 附属模式。
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        }
+
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        set_mini_view_active(true);
+        let _ = app.emit("tray://show-mini-view", ());
+    }
+}
+
 /// 处理系统托盘点击事件：实现跨平台现代 Popover（类似腾讯 Lemon / Raycast）
 /// 默认失焦自动收起（除非用户点击图钉进行固定）
 pub fn handle_tray_click(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
@@ -140,110 +285,18 @@ pub fn handle_tray_click(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
             return;
         }
 
-        // 2. 唤醒并呈现 mini 悬浮窗（完全独立于主控制台窗口）
-        let window = match ensure_mini_window(app) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!("[Tray] 无法获取或重建 mini 悬浮窗: {}", e);
-                return;
-            }
-        };
-
-        const MINI_WIDTH: f64 = 360.0;
-        const MINI_HEIGHT: f64 = 360.0;
-
-        let monitor = window.current_monitor().ok().flatten();
-        let (mon_x, mon_y, mon_w, mon_h, scale_factor) = if let Some(ref m) = monitor {
-            let pos = m.position();
-            let sz = m.size();
-            let sf = m.scale_factor();
-            (
-                pos.x as f64,
-                pos.y as f64,
-                sz.width as f64,
-                sz.height as f64,
-                sf,
-            )
-        } else {
-            (0.0, 0.0, 1920.0, 1080.0, 1.0)
-        };
-
-        let physical_w = MINI_WIDTH * scale_factor;
-        let physical_h = MINI_HEIGHT * scale_factor;
-
-        let (mut win_x, mut win_y) = if let Some(r) = rect {
-            let (tray_x, tray_y) = match r.position {
-                tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
-                tauri::Position::Logical(p) => (p.x * scale_factor, p.y * scale_factor),
-            };
-            let (tray_w, tray_h) = match r.size {
-                tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
-                tauri::Size::Logical(s) => (s.width * scale_factor, s.height * scale_factor),
-            };
-
-            // 水平居中对齐托盘图标
-            let x = tray_x + (tray_w / 2.0) - (physical_w / 2.0);
-
-            // 垂直定位：跨平台适配（判断处于屏幕上半部分如 macOS 顶部菜单栏/Linux 顶栏，还是下半部分如 Windows 底部任务栏）
-            let y = if tray_y > mon_y + (mon_h / 2.0) {
-                // Windows 底部任务栏 / Linux 底部 Dock：窗口向上弹出
-                tray_y - physical_h - (4.0 * scale_factor)
-            } else {
-                // macOS 顶部菜单栏 / Windows 顶部任务栏：窗口向下弹出
-                tray_y + tray_h + (4.0 * scale_factor)
-            };
-
-            (x, y)
-        } else {
-            // 无托盘坐标时，默认优雅居中于主屏顶部下方
-            (
-                mon_x + (mon_w - physical_w) / 2.0,
-                mon_y + 40.0 * scale_factor,
-            )
-        };
-
-        // 四边屏幕边缘安全吸附限制（留出 8px 边距）
-        let margin = 8.0 * scale_factor;
-        if win_x < mon_x + margin {
-            win_x = mon_x + margin;
-        }
-        if win_x + physical_w > mon_x + mon_w - margin {
-            win_x = mon_x + mon_w - physical_w - margin;
-        }
-        if win_y < mon_y + margin {
-            win_y = mon_y + margin;
-        }
-        if win_y + physical_h > mon_y + mon_h - margin {
-            win_y = mon_y + mon_h - physical_h - margin;
-        }
-
-        let _ = window.set_decorations(false);
-        let _ = window.set_resizable(false);
-        let _ = window.set_shadow(true);
-        let _ = window.set_always_on_top(is_mini_view_pinned());
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-            MINI_WIDTH,
-            MINI_HEIGHT,
-        )));
-        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-            win_x as i32,
-            win_y as i32,
-        )));
-
-        // macOS 专属策略：唤起 Mini 视窗时，始终切换为 Accessory 附属模式。
-        // 关键点：当主控制台处于 Regular 模式（在后台、另一个桌面 Space、或已最小化到 Dock）时，
-        // 若在 Regular 模式下直接调用 window.set_focus()，AppKit 的 activateIgnoringOtherApps:YES
-        // 会将整个应用程序激活并将其所有可见窗口（包括主控制台）强制提至前台或触发跨 Space 跳转。
-        // 切至 Accessory 模式后，系统仅将 Mini 独立呈现置顶，绝不干扰或强拉后台的主控制台。
-        #[cfg(target_os = "macos")]
+        // 2. 隐藏主窗口并唤醒呈现 mini 悬浮窗
+        #[cfg(target_os = "windows")]
         {
-            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            let app_handle = app.clone();
+            crate::modules::lightweight::defer_on_main_thread(app, move || {
+                open_mini_window(&app_handle, rect);
+            });
         }
-
-        let _ = window.show();
-        let _ = window.set_focus();
-        set_mini_view_active(true);
-        let _ = app.emit("tray://show-mini-view", ());
+        #[cfg(not(target_os = "windows"))]
+        {
+            open_mini_window(app, rect);
+        }
     }
 }
 
@@ -506,7 +559,20 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         }
                     }
                     "mini_view" => {
-                        handle_tray_click(&app_handle, None);
+                        #[cfg(target_os = "windows")]
+                        {
+                            let deferred_handle = app_handle.clone();
+                            crate::modules::lightweight::defer_on_main_thread(
+                                &app_handle,
+                                move || {
+                                    open_mini_window(&deferred_handle, None);
+                                },
+                            );
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            open_mini_window(&app_handle, None);
+                        }
                     }
                     "toggle_lightweight" => {
                         tauri::async_runtime::spawn(async move {

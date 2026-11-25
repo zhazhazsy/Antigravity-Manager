@@ -18,7 +18,6 @@ import { useTranslation } from 'react-i18next';
 import { getGroupQuotaSummaries, GroupQuotaSummary } from '../../utils/quotaDisplay';
 import { GroupQuotaCard } from '../accounts/GroupQuotaCard';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
-import { isArgonModel } from '../../utils/modelCategory';
 
 interface CurrentAccountProps {
     account?: Account | null;
@@ -119,15 +118,12 @@ function CurrentAccount({
           )
         : [];
 
-    const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
+    const isGroupProtected = (key: 'gemini' | 'claude') => {
         if (!displayedAccount?.protected_models || displayedAccount.protected_models.length === 0)
             return false;
-        if (key === 'argon') {
-            return displayedAccount.protected_models.some(isArgonModel);
-        }
         if (key === 'gemini') {
             return displayedAccount.protected_models.some(
-                (m) => m.toLowerCase().includes('gemini') && !isArgonModel(m)
+                (m) => m.toLowerCase().includes('gemini')
             );
         }
         return displayedAccount.protected_models.some(
@@ -246,41 +242,22 @@ function CurrentAccount({
                         )}
                     </div>
 
-                    {/* 统一分组展示: Gemini、Claude/第三方以及专属 Gemini 4 Argon */}
+                    {/* 统一分组展示: Gemini 与 Claude/第三方（共 4 个核心配额条） */}
                     <div className="flex flex-col gap-2 my-auto">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {groupSummaries
-                                .filter((s) => s.key !== 'argon')
-                                .map((summary) => (
-                                    <GroupQuotaCard
-                                        key={summary.key}
-                                        summary={summary}
-                                        isProtected={isGroupProtected(summary.key)}
-                                        liveLimit={
-                                            summary.key === 'gemini'
-                                                ? getLiveLimitForModel(displayedAccount, 'gemini-pro')
-                                                : getLiveLimitForModel(displayedAccount, 'claude')
-                                        }
-                                    />
-                                ))}
+                            {groupSummaries.map((summary) => (
+                                <GroupQuotaCard
+                                    key={summary.key}
+                                    summary={summary}
+                                    isProtected={isGroupProtected(summary.key === 'gemini' ? 'gemini' : 'claude')}
+                                    liveLimit={
+                                        summary.key === 'gemini'
+                                            ? getLiveLimitForModel(displayedAccount, 'gemini-pro')
+                                            : getLiveLimitForModel(displayedAccount, 'claude')
+                                    }
+                                />
+                            ))}
                         </div>
-                        {(() => {
-                            const argon = groupSummaries.find((s) => s.key === 'argon');
-                            if (!argon) return null;
-                            return (
-                                <div className="w-full">
-                                    <GroupQuotaCard
-                                        summary={argon}
-                                        isProtected={isGroupProtected('argon')}
-                                        liveLimit={getLiveLimitForModel(
-                                            displayedAccount,
-                                            'gemini-4-argon'
-                                        )}
-                                        fullWidth
-                                    />
-                                </div>
-                            );
-                        })()}
                     </div>
 
                     {onSwitch && (

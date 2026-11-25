@@ -348,7 +348,7 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                 ) : (
                     <div className="flex flex-col gap-1.5 content-start">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
+                            {groupSummaries.map((summary) => (
                                 <GroupQuotaCard
                                     key={summary.key}
                                     summary={summary}
@@ -356,19 +356,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                 />
                             ))}
                         </div>
-                        {(() => {
-                            const argon = groupSummaries.find(s => s.key === 'argon');
-                            if (!argon) return null;
-                            return (
-                                <div className="w-full">
-                                    <GroupQuotaCard
-                                        summary={argon}
-                                        liveLimit={getLiveLimitForModel(account, 'gemini-4-neon') || getLiveLimitForModel(account, 'gemini-4-argon')}
-                                        fullWidth
-                                    />
-                                </div>
-                            );
-                        })()}
                     </div>
                 )}
             </div>

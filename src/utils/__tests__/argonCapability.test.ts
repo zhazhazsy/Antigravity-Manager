@@ -59,8 +59,7 @@ test('Ultra tier without dedicated argon group has Argon capability', () => {
     assertEqual(checkArgonEligibility(ultraAccount.quota.quota_groups, ultraAccount.quota.models, 'ultra'), true, 'Ultra checkArgonEligibility');
     const summaries = getGroupQuotaSummaries(ultraAccount.quota.quota_groups, ultraAccount.quota.models, 'ultra');
     const argonSummary = summaries.find(s => s.key === 'argon');
-    assertEqual(Boolean(argonSummary), true, 'Argon summary present for Ultra');
-    assertEqual(argonSummary?.weekly?.percentage, 84, 'Argon inherits weekly quota from Gemini pool');
+    assertEqual(Boolean(argonSummary), false, 'Argon summary omitted when only 4 core quota bars are shown');
 });
 
 // 2. Pro Tier Tests: With dedicated Argon quota group
@@ -94,8 +93,7 @@ test('Pro tier with dedicated Argon quota group has Argon capability', () => {
     assertEqual(checkArgonEligibility(proAccount.quota.quota_groups, proAccount.quota.models, 'pro'), true, 'Pro checkArgonEligibility');
     const summaries = getGroupQuotaSummaries(proAccount.quota.quota_groups, proAccount.quota.models, 'pro');
     const argonSummary = summaries.find(s => s.key === 'argon');
-    assertEqual(Boolean(argonSummary), true, 'Argon summary present for Pro');
-    assertEqual(argonSummary?.weekly?.percentage, 100, 'Argon uses its own weekly bucket');
+    assertEqual(Boolean(argonSummary), false, 'Argon summary omitted when only 4 core quota bars are shown');
 });
 
 // 3. Free Tier Tests: Without Argon quota group
@@ -201,8 +199,8 @@ test('extractGemini4Codename correctly extracts future and current codenames, fi
     assertEqual(extractGemini4Codename('gemini-4-neon_disabled'), null, 'Underscore disabled filtered');
 });
 
-// 7. Dynamic Quota Summary Label Resolution (Neon replaces Argon as primary)
-test('getGroupQuotaSummaries generates dynamic Gemini 4 Neon label for Neon models', () => {
+// 7. Only core Gemini & Claude quota groups are returned (no standalone Neon bar)
+test('getGroupQuotaSummaries omits standalone Gemini 4 Neon summary and keeps core groups', () => {
     const proNeonAccount = {
         quota: {
             last_updated: Date.now(),
@@ -231,9 +229,9 @@ test('getGroupQuotaSummaries generates dynamic Gemini 4 Neon label for Neon mode
 
     const summaries = getGroupQuotaSummaries(proNeonAccount.quota.quota_groups, proNeonAccount.quota.models, 'pro');
     const neonSummary = summaries.find(s => s.key === 'argon');
-    assertEqual(Boolean(neonSummary), true, 'Flagship summary present');
-    assertEqual(neonSummary?.dynamicLabel, 'Gemini 4 Neon', 'Dynamic label correctly set to Gemini 4 Neon');
-    assertEqual(neonSummary?.weekly?.percentage, 88, 'Weekly percentage matches Neon group');
+    assertEqual(Boolean(neonSummary), false, 'Standalone Neon summary omitted');
+    assertEqual(summaries.length, 2, 'Only gemini and claude summaries returned');
+    assertEqual(summaries.find(s => s.key === 'gemini')?.weekly?.percentage, 95, 'Gemini weekly quota matches standard Gemini group');
 });
 
 console.log(`Passed: ${passed}, Failed: ${failed}`);

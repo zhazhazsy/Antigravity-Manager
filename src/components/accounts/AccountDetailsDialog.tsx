@@ -29,7 +29,9 @@ export default function AccountDetailsDialog({
     const [fetchingProjectId, setFetchingProjectId] = useState(false);
 
     const displayGroups = useMemo(() => {
-        return account?.quota?.quota_groups || [];
+        return (account?.quota?.quota_groups || []).filter(
+            (g) => !/neon|argon/i.test(g.display_name || '')
+        );
     }, [account?.quota?.quota_groups]);
 
     const displayModels = useMemo(() => {

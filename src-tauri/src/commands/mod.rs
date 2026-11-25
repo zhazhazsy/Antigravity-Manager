@@ -766,7 +766,7 @@ pub async fn switch_to_main_window(app: tauri::AppHandle) -> Result<(), String> 
 pub async fn show_mini_view(app: tauri::AppHandle) -> Result<(), String> {
     let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        crate::modules::tray::handle_tray_click(&app_handle, None);
+        crate::modules::tray::open_mini_window(&app_handle, None);
     });
     Ok(())
 }

@@ -587,7 +587,7 @@ function AccountRowContent({
                 ) : (
                     <div className="flex flex-col gap-1.5 py-0.5">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                            {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
+                            {groupSummaries.map((summary) => (
                                 <GroupQuotaCard
                                     key={summary.key}
                                     summary={summary}
@@ -596,20 +596,6 @@ function AccountRowContent({
                                 />
                             ))}
                         </div>
-                        {(() => {
-                            const argon = groupSummaries.find(s => s.key === 'argon');
-                            if (!argon) return null;
-                            return (
-                                <div className="w-full pt-0.5">
-                                    <GroupQuotaCard
-                                        summary={argon}
-                                        liveLimit={getLiveLimitForModel(account, 'gemini-4-neon') || getLiveLimitForModel(account, 'gemini-4-argon')}
-                                        compact
-                                        fullWidth
-                                    />
-                                </div>
-                            );
-                        })()}
                     </div>
                 )}
             </td>
