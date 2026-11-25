@@ -4,32 +4,19 @@ import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
 import Settings from './pages/Settings';
-import ApiProxy from './pages/ApiProxy';
-import Monitor from './pages/Monitor';
-import TokenStats from './pages/TokenStats';
-import Security from './pages/Security';
 import ThemeManager from './components/common/ThemeManager';
 import ZoomManager from './components/common/ZoomManager';
-import UserToken from './pages/UserToken';
-import { ApiKeyFun } from './pages/ApiKeyFun';
 import { UpdateNotification } from './components/UpdateNotification';
-import SuggestionDeleteThinkingModal from './components/common/SuggestionDeleteThinkingModal';
 import DebugConsole from './components/debug/DebugConsole';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useConfigStore, normalizeLanguageCode } from './stores/useConfigStore';
 import { useAccountStore } from './stores/useAccountStore';
-import { useViewStore } from './stores/useViewStore';
-import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { isTauri } from './utils/env';
 import { request as invoke } from './utils/request';
-import { AdminAuthGuard } from './components/common/AdminAuthGuard';
-import { showToast } from './components/common/ToastContainer';
 import MiniView from './components/layout/MiniView';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-
-// 官方 Hub 更新提示每进程只飘一次（避免 React StrictMode 双挂载重复弹）
-let hubUpdateNoticeShown = false;
 
 const router = createBrowserRouter([
   {
@@ -50,30 +37,6 @@ const router = createBrowserRouter([
         element: <Accounts />,
       },
       {
-        path: 'api-proxy',
-        element: <ApiProxy />,
-      },
-      {
-        path: 'monitor',
-        element: <Monitor />,
-      },
-      {
-        path: 'token-stats',
-        element: <TokenStats />,
-      },
-      {
-        path: 'user-token',
-        element: <UserToken />,
-      },
-      {
-        path: 'apikey-fun',
-        element: <ApiKeyFun />,
-      },
-      {
-        path: 'security',
-        element: <Security />,
-      },
-      {
         path: 'settings',
         element: <Settings />,
       },
@@ -86,9 +49,9 @@ const router = createBrowserRouter([
 ]);
 
 function App() {
+  const { i18n } = useTranslation();
   const { config, loadConfig } = useConfigStore();
   const { fetchCurrentAccount, fetchAccounts } = useAccountStore();
-  const { t, i18n } = useTranslation();
 
   useEffect(() => {
     loadConfig();
@@ -153,15 +116,6 @@ function App() {
         console.log('[App] Tray refresh triggered, refreshing...');
         fetchCurrentAccount();
         fetchAccounts();
-      })
-    );
-
-    // 监听托盘显示主窗口事件
-    unlistenPromises.push(
-      listen('tray://show-window', async () => {
-        if (!isTauri() && useViewStore.getState().isMiniView) {
-          useViewStore.getState().setMiniView(false);
-        }
       })
     );
 
@@ -296,36 +250,7 @@ function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  // 官方 Hub 版本提示：只提示，不改变出站指纹（CL 无法自动获取，必须与版本成对校准）
-  // 文案走 i18n（hub_update.available），各语言仅翻译尾部说明，版本前缀保持统一
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.location.search.includes('mini')) return;
-    if (hubUpdateNoticeShown) return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await invoke<{ current: string; latest: string | null; update_available: boolean }>('check_hub_update');
-        if (cancelled || hubUpdateNoticeShown) return;
-        if (res?.update_available && res.latest) {
-          hubUpdateNoticeShown = true;
-          showToast(
-            t('hub_update.available', {
-              version: res.latest,
-              defaultValue: 'antigravity hub latest: {{version}}',
-            }),
-            'info',
-            8000
-          );
-        }
-      } catch {
-        // 静默：更新提示失败不影响任何功能
-      }
-    }, 3000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, []);
+  // 官方 Hub 版本提示：已移除反代后不再检查 Hub 更新
 
   const isMini =
     (typeof window !== 'undefined' && window.location.search.includes('mini')) ||
@@ -358,24 +283,23 @@ function App() {
       }
     }
     return (
-      <AdminAuthGuard>
+      <>
         <ThemeManager />
         <MiniView />
-      </AdminAuthGuard>
+      </>
     );
   }
 
   return (
-    <AdminAuthGuard>
+    <>
       <ThemeManager />
       <ZoomManager />
       <DebugConsole />
-      <SuggestionDeleteThinkingModal />
       {showUpdateNotification && (
         <UpdateNotification onClose={() => setShowUpdateNotification(false)} />
       )}
       <RouterProvider router={router} />
-    </AdminAuthGuard>
+    </>
   );
 }
 

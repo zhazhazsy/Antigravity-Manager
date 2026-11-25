@@ -1,24 +1,48 @@
 use crate::models::AccountBanInfo;
 use crate::models::QuotaData;
-use crate::modules::config;
 use once_cell::sync::Lazy;
 use rquest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// 配额模块专属端点健康追踪器（独立观察期 60s），
-/// 与主代理网关的 GLOBAL_ENDPOINT_HEALTH 严格解耦，
-/// 坚决杜绝后台配额轮询与 project_id 探针超时污染推理主力端点（Issue #3506, PR #3680）
-static QUOTA_ENDPOINT_HEALTH: Lazy<crate::proxy::upstream::client::EndpointHealthTracker> =
-    Lazy::new(|| {
-        crate::proxy::upstream::client::EndpointHealthTracker::new(std::time::Duration::from_secs(
-            60,
-        ))
-    });
+static QUOTA_ENDPOINT_HEALTH: Lazy<crate::utils::http::EndpointHealthTracker> = Lazy::new(|| {
+    crate::utils::http::EndpointHealthTracker::new(std::time::Duration::from_secs(60))
+});
 
-pub fn get_quota_endpoint_health() -> &'static crate::proxy::upstream::client::EndpointHealthTracker
-{
+pub fn get_quota_endpoint_health() -> &'static crate::utils::http::EndpointHealthTracker {
     &QUOTA_ENDPOINT_HEALTH
+}
+
+const V1_INTERNAL_WARMUP_BASE_URLS: [&str; 2] = [
+    "https://daily-cloudcode-pa.googleapis.com/v1internal",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal",
+];
+
+fn wrap_v1internal_request(
+    mut inner: serde_json::Value,
+    project_id: &str,
+    model: &str,
+    session_id: &str,
+    request_type: Option<&str>,
+) -> serde_json::Value {
+    if let Some(obj) = inner.as_object_mut() {
+        obj.remove("session_id");
+        obj.remove("model");
+        if !session_id.is_empty() {
+            obj.insert("sessionId".to_string(), json!(session_id));
+        }
+    }
+    let mut envelope = json!({
+        "project": project_id,
+        "requestId": format!("agent/{}", uuid::Uuid::new_v4()),
+        "request": inner,
+        "model": model,
+        "userAgent": "antigravity",
+    });
+    if let Some(rt) = request_type {
+        envelope["requestType"] = json!(rt);
+    }
+    envelope
 }
 
 // Quota API endpoints (fallback order: Daily → Sandbox)
@@ -249,13 +273,12 @@ pub async fn probe_account_ban(
         "session_id": session_id
     });
 
-    let payload = crate::proxy::mappers::gemini::wrapper::wrap_request(
-        &base_request,
+    let payload = wrap_v1internal_request(
+        base_request,
         project_id.unwrap_or(""),
         BAN_PROBE_MODEL,
-        account_id,
-        Some(&session_id),
-        None,
+        &session_id,
+        Some("agent"),
     );
 
     let mut last_outcome = BanProbeOutcome::Unknown;
@@ -313,22 +336,14 @@ pub async fn probe_account_ban(
 }
 
 /// Get shared HTTP Client (15s timeout) for pure info fetching (No JA3)
-async fn create_standard_client(account_id: Option<&str>) -> rquest::Client {
-    if let Some(pool) = crate::proxy::proxy_pool::get_global_proxy_pool() {
-        pool.get_effective_standard_client(account_id, 15).await
-    } else {
-        crate::utils::http::get_standard_client()
-    }
+async fn create_standard_client(_account_id: Option<&str>) -> rquest::Client {
+    crate::utils::http::get_standard_client()
 }
 
 /// Get shared HTTP Client (60s timeout) for pure info fetching (No JA3)
 #[allow(dead_code)] // 预留给预热/后台任务调用
-async fn create_long_standard_client(account_id: Option<&str>) -> rquest::Client {
-    if let Some(pool) = crate::proxy::proxy_pool::get_global_proxy_pool() {
-        pool.get_effective_standard_client(account_id, 60).await
-    } else {
-        crate::utils::http::get_long_standard_client()
-    }
+async fn create_long_standard_client(_account_id: Option<&str>) -> rquest::Client {
+    crate::utils::http::get_long_standard_client()
 }
 
 // 项目 / 档位解析端点（fallback order: Daily → Sandbox → Prod）
@@ -431,9 +446,7 @@ async fn fetch_project_id(
                         return (project_id, subscription_tier, Some(raw_tier));
                     }
                 } else {
-                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
-                        status, ep_url,
-                    ) {
+                    if crate::utils::http::should_try_next_endpoint_for_url(status, ep_url) {
                         health_tracker.mark_failure(ep_url);
                     }
                     crate::modules::logger::log_warn(&format!(
@@ -548,9 +561,7 @@ pub async fn fetch_quota_with_cache(
                 if let Err(_) = response.error_for_status_ref() {
                     let status = response.status();
 
-                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
-                        status, ep_url,
-                    ) {
+                    if crate::utils::http::should_try_next_endpoint_for_url(status, ep_url) {
                         health_tracker.mark_failure(ep_url);
                     }
 
@@ -705,9 +716,7 @@ pub async fn fetch_quota_with_cache(
                     {
                         continue;
                     }
-                    if let Some(code) =
-                        crate::proxy::common::model_mapping::extract_gemini4_codename(&nl)
-                    {
+                    if let Some(code) = crate::utils::model_id::extract_gemini4_codename(&nl) {
                         if !known_g4_codenames.iter().any(|c| c == &code) {
                             known_g4_codenames.push(code);
                         }
@@ -733,9 +742,7 @@ pub async fn fetch_quota_with_cache(
 
                     // 仅保留当前账号官方实际支持且符合旗舰基准线的模型（彻底剔除 2.5、3.5-flash-low、3-flash-agent、chat_* 等遗留内部条目）
                     if !in_official_sort
-                        || !crate::proxy::common::model_mapping::is_model_compliant_with_baseline(
-                            &name,
-                        )
+                        || !crate::utils::model_id::is_model_compliant_with_baseline(&name)
                     {
                         continue;
                     }
@@ -903,10 +910,8 @@ pub async fn fetch_quota_with_cache(
                     });
                     if (has_argon_group || is_ultra)
                         && !quota_data.models.iter().any(|m| {
-                            crate::proxy::common::model_mapping::extract_gemini4_codename(
-                                &m.name.to_lowercase(),
-                            )
-                            .as_deref()
+                            crate::utils::model_id::extract_gemini4_codename(&m.name.to_lowercase())
+                                .as_deref()
                                 == Some("argon")
                         })
                     {
@@ -1056,9 +1061,7 @@ async fn fetch_quota_summary(
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
-                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
-                        status, ep_url,
-                    ) {
+                    if crate::utils::http::should_try_next_endpoint_for_url(status, ep_url) {
                         health_tracker.mark_failure(ep_url);
                     }
                     crate::modules::logger::log_warn(&format!(
@@ -1202,7 +1205,7 @@ pub async fn get_valid_token_for_warmup(
     Ok((account.token.access_token, final_pid))
 }
 
-/// Send warmup request via proxy internal API
+/// Send warmup request directly to upstream v1internal endpoints (respects global network proxy)
 pub async fn warmup_model_directly(
     access_token: &str,
     model_name: &str,
@@ -1210,65 +1213,121 @@ pub async fn warmup_model_directly(
     email: &str,
     percentage: i32,
     account_id: Option<&str>,
-    probe_intent: bool,
+    _probe_intent: bool,
 ) -> bool {
-    // Get currently configured proxy port
-    let port = config::load_app_config()
-        .map(|c| c.proxy.port)
-        .unwrap_or(8045);
+    let mapped_model = crate::utils::model_id::map_claude_model_to_gemini(model_name);
+    let session_id = format!(
+        "warmup_{}_{}",
+        chrono::Utc::now().timestamp_millis(),
+        &uuid::Uuid::new_v4().to_string()[..8]
+    );
+    let model_lower = mapped_model.to_lowercase();
+    let is_image = model_lower.contains("image") || model_name.to_lowercase().contains("image");
+    let is_claude = model_lower.contains("claude") || model_name.to_lowercase().contains("claude");
 
-    let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
-    let mut body = json!({
-        "email": email,
-        "model": model_name,
-        "access_token": access_token,
-        "project_id": project_id,
-        "probe_intent": probe_intent
-    });
-    if let Some(acc_id) = account_id {
-        body["account_id"] = json!(acc_id);
-    }
+    let inner = if is_image {
+        json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "Say hi" }] }],
+            "generationConfig": {
+                "maxOutputTokens": 10,
+                "temperature": 0,
+                "responseModalities": ["TEXT"]
+            }
+        })
+    } else if is_claude {
+        json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "ping" }] }],
+            "generationConfig": {
+                "maxOutputTokens": 1,
+                "temperature": 0
+            }
+        })
+    } else {
+        json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "Say hi" }] }],
+            "generationConfig": {
+                "temperature": 0
+            }
+        })
+    };
 
-    // Use a no-proxy client for local loopback requests
-    // This prevents Docker environments from routing localhost through external proxies
-    let client = rquest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .no_proxy()
-        .build()
-        .unwrap_or_else(|_| rquest::Client::new());
-    let resp = client
-        .post(&warmup_url)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await;
+    let request_type = if is_image { "image_gen" } else { "agent" };
+    let payload = wrap_v1internal_request(
+        inner,
+        project_id,
+        &mapped_model,
+        &session_id,
+        Some(request_type),
+    );
 
-    match resp {
-        Ok(response) => {
-            let status = response.status();
-            if status.is_success() {
-                crate::modules::logger::log_info(&format!(
-                    "[Warmup] ✓ Triggered {} for {} (was {}%)",
-                    model_name, email, percentage
-                ));
-                true
-            } else {
-                let text = response.text().await.unwrap_or_default();
-                crate::modules::logger::log_error(&format!(
-                    "[Warmup] ✗ {} for {} (was {}%): HTTP {} - {} (非服务端故障)",
-                    model_name, email, percentage, status, text
-                ));
-                false
+    let prefer_non_stream = model_lower.contains("flash-lite") || model_lower.contains("2.5-pro");
+    let methods: &[(&str, &str)] = if prefer_non_stream {
+        &[("generateContent", ":generateContent")]
+    } else {
+        &[
+            ("streamGenerateContent", ":streamGenerateContent?alt=sse"),
+            ("generateContent", ":generateContent"),
+        ]
+    };
+
+    let client = create_long_standard_client(account_id).await;
+    let health_tracker = get_quota_endpoint_health();
+    let candidate_bases = health_tracker.get_ordered_endpoints(&V1_INTERNAL_WARMUP_BASE_URLS);
+
+    for base_url in candidate_bases {
+        for &(_method_name, suffix) in methods {
+            let target_url = format!("{}{}", base_url, suffix);
+            let resp = client
+                .post(&target_url)
+                .timeout(std::time::Duration::from_secs(60))
+                .bearer_auth(access_token)
+                .header(rquest::header::CONTENT_TYPE, "application/json")
+                .header(
+                    rquest::header::USER_AGENT,
+                    crate::constants::current_egress_user_agent().as_str(),
+                )
+                .json(&payload)
+                .send()
+                .await;
+
+            match resp {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let _ = response.text().await;
+                        health_tracker.mark_success(base_url);
+                        crate::modules::logger::log_info(&format!(
+                            "[Warmup] ✓ Triggered {} for {} (was {}%)",
+                            model_name, email, percentage
+                        ));
+                        return true;
+                    }
+                    let err_text = response.text().await.unwrap_or_default();
+                    if crate::utils::http::should_try_next_endpoint_for_url(status, base_url) {
+                        health_tracker.mark_failure(base_url);
+                    }
+                    crate::modules::logger::log_warn(&format!(
+                        "[Warmup] Endpoint {} returned {} for {} ({}): {}",
+                        target_url, status, model_name, email, err_text
+                    ));
+                    if !crate::utils::http::should_try_next_endpoint_for_url(status, base_url)
+                        && status != rquest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    health_tracker.mark_failure(base_url);
+                    crate::modules::logger::log_warn(&format!(
+                        "[Warmup] Request failed at {} for {} ({}): {}",
+                        target_url, model_name, email, e
+                    ));
+                }
             }
         }
-        Err(e) => {
-            crate::modules::logger::log_error(&format!(
-                "[Warmup] ✗ {} for {} (was {}%): {} (网络请求异常，非服务端故障)",
-                model_name, email, percentage, e
-            ));
-            false
-        }
     }
+
+    false
 }
 
 /// Smart warmup for all accounts
@@ -1277,10 +1336,10 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
 
     loop {
         let all_accounts = crate::modules::account::list_accounts().unwrap_or_default();
-        // [FIX] 过滤掉禁用反代 / 已被上游封禁的账号
+        // 过滤掉已禁用或已被上游封禁的账号
         let target_accounts: Vec<_> = all_accounts
             .into_iter()
-            .filter(|a| !a.disabled && !a.proxy_disabled && !a.banned)
+            .filter(|a| !a.disabled && !a.banned)
             .collect();
 
         if target_accounts.is_empty() {
@@ -1506,7 +1565,7 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
         .cloned()
         .ok_or_else(|| "Account not found".to_string())?;
 
-    if account_owned.disabled || account_owned.proxy_disabled || account_owned.banned {
+    if account_owned.disabled || account_owned.banned {
         return Err("Account is disabled".to_string());
     }
 
@@ -1623,19 +1682,15 @@ fn is_dedicated_g4_group(
     known_codenames: &[String],
 ) -> bool {
     let gname = group.display_name.to_lowercase();
-    if crate::proxy::common::model_mapping::extract_group_g4_codename_with_known(
-        &gname,
-        "",
-        known_codenames,
-    )
-    .is_some()
+    if crate::utils::model_id::extract_group_g4_codename_with_known(&gname, "", known_codenames)
+        .is_some()
     {
         return true;
     }
     group.buckets.iter().any(|b| {
         let bid = b.bucket_id.to_lowercase();
         let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
-        crate::proxy::common::model_mapping::extract_group_g4_codename_with_known(
+        crate::utils::model_id::extract_group_g4_codename_with_known(
             &bname,
             &bid,
             known_codenames,
@@ -1667,7 +1722,7 @@ fn find_general_gemini_group<'a>(
 
 /// Extract a Gemini 4+ codename (e.g. "argon", "hydrogen", "carbon") when present.
 fn extract_g4_codename(name_lower: &str) -> Option<String> {
-    crate::proxy::common::model_mapping::extract_gemini4_codename(name_lower)
+    crate::utils::model_id::extract_gemini4_codename(name_lower)
 }
 
 /// Match a model from `fetchAvailableModels` against `retrieveUserQuotaSummary` groups.
@@ -1794,9 +1849,8 @@ mod tests {
 
     #[test]
     fn test_quota_and_load_project_endpoints_health_reordering() {
-        let tracker = crate::proxy::upstream::client::EndpointHealthTracker::new(
-            std::time::Duration::from_secs(60),
-        );
+        let tracker =
+            crate::utils::http::EndpointHealthTracker::new(std::time::Duration::from_secs(60));
 
         let quota_api_order = vec![
             "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
@@ -1840,15 +1894,11 @@ mod tests {
         );
     }
 
-    /// 配额读数必须来自推理实际使用的 host。Prod 已在 6a4806e 从推理端点移除，
-    /// 而它报告的 Gemini 配额与 Daily / Sandbox 不一致；两份列表一旦再次分叉，这里会失败。
     #[test]
-    fn test_quota_endpoints_only_use_inference_hosts() {
-        use crate::proxy::upstream::client::{
-            extract_endpoint_host, V1_INTERNAL_BASE_URL_FALLBACKS,
-        };
+    fn test_quota_endpoints_only_use_warmup_hosts() {
+        use crate::utils::http::extract_endpoint_host;
 
-        let inference_hosts: Vec<&str> = V1_INTERNAL_BASE_URL_FALLBACKS
+        let inference_hosts: Vec<&str> = V1_INTERNAL_WARMUP_BASE_URLS
             .iter()
             .map(|url| extract_endpoint_host(url))
             .collect();

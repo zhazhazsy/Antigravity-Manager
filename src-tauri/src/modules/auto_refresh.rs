@@ -76,10 +76,7 @@ pub fn try_acquire_refresh_lock() -> Option<RefreshLockGuard> {
 }
 
 /// 启动后台自动配额刷新调度协程
-pub fn start_auto_refresh(
-    app_handle: Option<tauri::AppHandle>,
-    proxy_state: crate::commands::proxy::ProxyServiceState,
-) {
+pub fn start_auto_refresh(app_handle: Option<tauri::AppHandle>) {
     if AUTO_REFRESH_STARTED.swap(true, Ordering::SeqCst) {
         logger::log_info("[AutoRefresh] Background auto-refresh worker is already running");
         return;
@@ -155,19 +152,13 @@ pub fn start_auto_refresh(
                         app_config.refresh_interval
                     ));
 
-                    let state_clone = proxy_state.clone();
                     let handle_clone = app_handle.clone();
                     let refresh_interval_mins = app_config.refresh_interval;
 
                     // 异步执行刷新，防止长时间阻塞主轮询 tick
                     tokio::spawn(async move {
                         let _task_guard = guard;
-                        match crate::commands::refresh_all_quotas_internal(
-                            &state_clone,
-                            handle_clone,
-                        )
-                        .await
-                        {
+                        match crate::commands::refresh_all_quotas_internal(handle_clone).await {
                             Ok(stats) => {
                                 logger::log_info(&format!(
                                     "[AutoRefresh] ✅ Background auto-refresh completed: {}/{} success, {} failed",

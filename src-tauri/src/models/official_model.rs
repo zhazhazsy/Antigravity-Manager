@@ -587,13 +587,13 @@ impl OfficialModelCatalog {
         }
 
         // 2. 通过项目已有别名表解析归一化 ID 匹配
-        let aliased = crate::proxy::model_specs::resolve_alias(model_id);
+        let aliased = crate::utils::model_id::resolve_alias(model_id);
         if let Some(info) = lock.get(&aliased) {
             return Some(info.clone());
         }
 
         // 2.5 通过路由映射解析匹配
-        let routed = crate::proxy::common::model_mapping::map_claude_model_to_gemini(model_id);
+        let routed = crate::utils::model_id::map_claude_model_to_gemini(model_id);
         if let Some(info) = lock.get(&routed) {
             return Some(info.clone());
         }

@@ -1,5 +1,5 @@
 import { Clock, Lock, Sparkles } from 'lucide-react';
-import { Gemini } from '@lobehub/icons';
+import { Gemini } from '../common/BrandIcons';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../utils/cn';
 import { getQuotaColor, formatTimeRemaining, getTimeRemainingColor } from '../../utils/format';

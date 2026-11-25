@@ -1,41 +1,10 @@
 import i18n from '../i18n';
-import { Account, ActiveClientsStatus, DeviceProfile, DeviceProfileVersion, QuotaData, ImportAccountEntry, BatchImportResult, ModelPriorities } from '../types/account';
+import { Account, ActiveClientsStatus, QuotaData, ImportAccountEntry, BatchImportResult } from '../types/account';
 export type { ImportAccountEntry, BatchImportResult };
 import { request as invoke } from '../utils/request';
 
-export async function updateAccountPriority(
-    accountId: string,
-    priority: number,
-    modelPriorities?: ModelPriorities
-): Promise<void> {
-    if (!Number.isInteger(priority) || priority < 1 || priority > 100) {
-        throw new Error(i18n.t('accounts.priority_invalid'));
-    }
-    const normalizedModelPriorities: Record<string, number> | undefined =
-        modelPriorities !== undefined ? {} : undefined;
-    if (modelPriorities && normalizedModelPriorities) {
-        for (const key of ['gemini', 'claude'] as const) {
-            const val = modelPriorities[key];
-            if (val !== undefined && val !== null) {
-                if (!Number.isInteger(val) || val < 1 || val > 100) {
-                    throw new Error(i18n.t('accounts.priority_invalid'));
-                }
-                normalizedModelPriorities[key] = val;
-            }
-        }
-    }
-    await invoke('update_account_priority', {
-        accountId,
-        priority,
-        ...(normalizedModelPriorities !== undefined
-            ? { modelPriorities: normalizedModelPriorities }
-            : {}),
-    });
-}
-
 // 检查环境 (可选)
 function ensureTauriEnvironment() {
-    // Web 模式下 request 也是一个 function，所以这里不应抛错
     if (typeof invoke !== 'function') {
         throw new Error(i18n.t('common.tauri_api_not_loaded'));
     }
@@ -43,7 +12,6 @@ function ensureTauriEnvironment() {
 
 export async function listAccounts(): Promise<Account[]> {
     const response = await invoke<any>('list_accounts');
-    // 如果返回的是对象格式 { accounts: [...] }, 则取其 accounts 属性
     if (response && typeof response === 'object' && Array.isArray(response.accounts)) {
         return response.accounts;
     }
@@ -68,10 +36,6 @@ export async function addAccount(email: string, refreshToken: string): Promise<A
 
 export async function deleteAccount(accountId: string): Promise<void> {
     return await invoke('delete_account', { accountId });
-}
-
-export async function releaseAccountQoSJail(accountId: string): Promise<void> {
-    return await invoke('release_account_qos_jail', { accountId });
 }
 
 export async function deleteAccounts(accountIds: string[]): Promise<void> {
@@ -104,13 +68,10 @@ export async function startOAuthLogin(oauthClientKey?: string): Promise<Account>
     try {
         return await invoke('start_oauth_login', oauthClientKey ? { oauthClientKey } : undefined);
     } catch (error) {
-        // 增强错误信息
         if (typeof error === 'string') {
-            // 如果是 refresh_token 缺失错误,保持原样(已包含详细说明)
             if (error.includes('Refresh Token') || error.includes('refresh_token')) {
                 throw error;
             }
-            // 其他错误添加上下文
             throw i18n.t('accounts.add.oauth_error', { error });
         }
         throw error;
@@ -191,10 +152,6 @@ export async function syncAccountFromDb(): Promise<Account | null> {
     return await invoke('sync_account_from_db');
 }
 
-export async function toggleProxyStatus(accountId: string, enable: boolean, reason?: string): Promise<void> {
-    return await invoke('toggle_proxy_status', { accountId, enable, reason });
-}
-
 export async function clearAccountForbidden(accountId: string): Promise<void> {
     return await invoke('clear_account_forbidden', { accountId });
 }
@@ -205,49 +162,6 @@ export async function clearAccountForbidden(accountId: string): Promise<void> {
  */
 export async function reorderAccounts(accountIds: string[]): Promise<void> {
     return await invoke('reorder_accounts', { accountIds });
-}
-
-// 设备指纹相关
-export interface DeviceProfilesResponse {
-    current_storage?: DeviceProfile;
-    history?: DeviceProfileVersion[];
-    baseline?: DeviceProfile;
-}
-
-export async function getDeviceProfiles(accountId: string): Promise<DeviceProfilesResponse> {
-    return await invoke('get_device_profiles', { accountId });
-}
-
-export async function bindDeviceProfile(accountId: string, mode: 'capture' | 'generate'): Promise<DeviceProfile> {
-    return await invoke('bind_device_profile', { accountId, mode });
-}
-
-export async function restoreOriginalDevice(): Promise<string> {
-    return await invoke('restore_original_device');
-}
-
-export async function listDeviceVersions(accountId: string): Promise<DeviceProfilesResponse> {
-    return await invoke('list_device_versions', { accountId });
-}
-
-export async function restoreDeviceVersion(accountId: string, versionId: string): Promise<DeviceProfile> {
-    return await invoke('restore_device_version', { accountId, versionId });
-}
-
-export async function deleteDeviceVersion(accountId: string, versionId: string): Promise<void> {
-    return await invoke('delete_device_version', { accountId, versionId });
-}
-
-export async function openDeviceFolder(): Promise<void> {
-    return await invoke('open_device_folder');
-}
-
-export async function previewGenerateProfile(): Promise<DeviceProfile> {
-    return await invoke('preview_generate_profile');
-}
-
-export async function bindDeviceProfileWithProfile(accountId: string, profile: DeviceProfile): Promise<DeviceProfile> {
-    return await invoke('bind_device_profile_with_profile', { accountId, profile });
 }
 
 // 预热相关

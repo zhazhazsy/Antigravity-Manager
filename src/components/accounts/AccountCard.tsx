@@ -1,19 +1,16 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { RefreshCw, Lock, Ban, Diamond, Gem, Zap, Circle, Clock, Tag, Power, MoreHorizontal, BookCopy, Check, Trash2, X } from 'lucide-react';
-import { Account, ActiveClientsStatus, getAccountTier, getEffectiveModelPriority, hasAccountFlagshipCapability, hasCustomModelPriorities } from '../../types/account';
+import { RefreshCw, Lock, Ban, Diamond, Gem, Circle, Clock, Tag, MoreHorizontal, BookCopy, Check, Trash2, X } from 'lucide-react';
+import { Account, ActiveClientsStatus, getAccountTier, hasAccountFlagshipCapability } from '../../types/account';
 import { cn } from '../../utils/cn';
 import { useTranslation } from 'react-i18next';
-import { useConfigStore } from '../../stores/useConfigStore';
 import { useAccountStore } from '../../stores/useAccountStore';
-import { usePedalModeStore } from '../../stores/usePedalModeStore';
 import { GroupQuotaCard } from './GroupQuotaCard';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
 import { showToast } from '../common/ToastContainer';
-import { exportAccounts, releaseAccountQoSJail } from '../../services/accountService';
+import { exportAccounts } from '../../services/accountService';
 import { copyToClipboard } from '../../utils/clipboard';
 import AccountSwitchMenu from './AccountSwitchMenu';
-import { QoSStatusBadge } from './QoSStatusBadge';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 import { getGroupQuotaSummaries } from '../../utils/quotaDisplay';
 import { isValidationBlockActive } from '../../utils/accountStatus';
@@ -31,21 +28,16 @@ interface AccountCardProps {
     isSwitching?: boolean;
     onSwitch: (targetIde?: string) => void;
     onRefresh: () => void;
-    onViewDevice: () => void;
     onViewDetails: () => void;
     onExport: () => void;
     onDelete: () => void;
-    onToggleProxy: () => void;
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
 }
 
-function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, activeClients, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError }: AccountCardProps) {
+function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, activeClients, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onWarmup, onUpdateLabel, onViewError }: AccountCardProps) {
     const { t } = useTranslation();
-    const { config } = useConfigStore();
-    const { active: isPedalActive, targetAccountIds } = usePedalModeStore();
-    const isPedaling = isPedalActive && targetAccountIds.includes(account.id);
     const isDisabled = Boolean(account.disabled);
     const isBanned = Boolean(account.banned);
     const isValidationBlocked = isValidationBlockActive(account);
@@ -81,16 +73,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
     const isAcp = activeClients?.acp_account_id === account.id;
     const isCurrent = propIsCurrent || isClassic || isIde || isAgy || isAcp;
 
-    const handleReleaseJail = async () => {
-        try {
-            await releaseAccountQoSJail(account.id);
-            showToast(t('accounts.qos.release_success', '已解除该账号的小黑屋限制'), 'success');
-            await useAccountStore.getState().fetchAccounts();
-        } catch (err: any) {
-            showToast(err?.message || '解除失败', 'error');
-        }
-    };
-
     const tier = useMemo(() => getAccountTier(account), [account]);
     const groupSummaries = useMemo(() => {
         return getGroupQuotaSummaries(account.quota?.quota_groups, account.quota?.models, tier);
@@ -109,30 +91,15 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
 
     const tags = useMemo(() => parseTags(account.custom_label), [account.custom_label]);
 
-    const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
-        if (!config?.quota_protection?.enabled) return false;
-        if (!account.protected_models || account.protected_models.length === 0) return false;
-        if (key === 'argon') {
-            return account.protected_models.some(isFlagshipModel);
-        }
-        if (key === 'gemini') {
-            return account.protected_models.some(m => m.toLowerCase().startsWith('gemini') && !isFlagshipModel(m));
-        } else {
-            return account.protected_models.some(m => m.toLowerCase().startsWith('claude') || m.toLowerCase().startsWith('gpt'));
-        }
-    };
-
     return (
         <motion.div
             whileHover={{ y: -2 }}
             transition={{ duration: 0.15 }}
             className={cn(
                 "flex flex-col p-3 rounded-xl border transition-all hover:shadow-md",
-                isPedaling
-                    ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-300 dark:border-amber-500/50 ring-2 ring-amber-400/60 shadow-xs"
-                    : (isCurrent
-                        ? "bg-blue-50/30 border-blue-200 dark:bg-blue-900/10 dark:border-blue-900/30"
-                        : "bg-white dark:bg-base-100 border-gray-200 dark:border-base-300"),
+                isCurrent
+                    ? "bg-blue-50/30 border-blue-200 dark:bg-blue-900/10 dark:border-blue-900/30"
+                    : "bg-white dark:bg-base-100 border-gray-200 dark:border-base-300",
                 (isRefreshing || isDisabled) && "opacity-70"
             )}
         >
@@ -234,14 +201,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                     {t('accounts.banned', '已封禁').toUpperCase()}
                                 </span>
                             )}
-                            {account.proxy_disabled && !isDisabled && !isBanned && (
-                                <span
-                                    className="px-1.5 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
-                                >
-                                    <Ban className="w-2.5 h-2.5" />
-                                    {t('accounts.proxy_disabled').toUpperCase()}
-                                </span>
-                            )}
                             {account.quota?.is_forbidden && !isBanned && (
                                 <span className="px-1.5 py-0.5 rounded-md bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-red-200/50">
                                     <Lock className="w-2.5 h-2.5" />
@@ -254,12 +213,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                     {validationBlockedLabel.toUpperCase()}
                                 </span>
                             )}
-                            <QoSStatusBadge
-                                status={account.qos_status}
-                                resetSeconds={account.qos_reset_seconds}
-                                size="sm"
-                                onRelease={handleReleaseJail}
-                            />
                             {/* 订阅类型徽章 */}
                             {(() => {
                                 const tier = getAccountTier(account);
@@ -293,36 +246,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                     );
                                 }
                             })()}
-                            {/* 蹬额度中高亮标识 */}
-                            {isPedaling && (
-                                <span
-                                    className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[9px] font-bold flex items-center gap-1 shadow-xs border border-amber-500/40 animate-pulse motion-reduce:animate-none"
-                                    title={t('pedal.account_pedaling_tooltip', '该账号当前处于蹬额度模式，已被设为最高调度优先级 (priority = 1)')}
-                                >
-                                    <Zap className="w-2.5 h-2.5 fill-current text-amber-500" />
-                                    {t('pedal.account_pedaling_badge', '⚡ 蹬额度中')}
-                                </span>
-                            )}
-                            {/* 优先级 */}
-                            <span
-                                className={cn(
-                                    "px-1.5 py-0.5 rounded-md text-[9px] font-bold",
-                                    isPedaling
-                                        ? "bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-300/80 dark:border-amber-700/80 shadow-2xs"
-                                        : hasCustomModelPriorities(account)
-                                            ? "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50"
-                                            : "bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400"
-                                )}
-                                title={
-                                    hasCustomModelPriorities(account)
-                                        ? `Gemini: ${getEffectiveModelPriority(account, 'gemini')} | Claude: ${getEffectiveModelPriority(account, 'claude')} (${t('accounts.priority')}: ${account.priority ?? 50})`
-                                        : t('accounts.priority_hint')
-                                }
-                            >
-                                {hasCustomModelPriorities(account)
-                                    ? `${t('accounts.priority')}: G:${getEffectiveModelPriority(account, 'gemini')} · C:${getEffectiveModelPriority(account, 'claude')}`
-                                    : `${t('accounts.priority')}: ${account.priority ?? 50}`}
-                            </span>
                             {/* 多标签平铺渲染 (最多显示 2 个，超出的显示 +N 徽章) */}
                             {tags.length > 0 && (
                                 <>
@@ -429,7 +352,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                 <GroupQuotaCard
                                     key={summary.key}
                                     summary={summary}
-                                    isProtected={isGroupProtected(summary.key)}
                                     liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
                                 />
                             ))}
@@ -441,7 +363,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                                 <div className="w-full">
                                     <GroupQuotaCard
                                         summary={argon}
-                                        isProtected={isGroupProtected('argon')}
                                         liveLimit={getLiveLimitForModel(account, 'gemini-4-neon') || getLiveLimitForModel(account, 'gemini-4-argon')}
                                         fullWidth
                                     />
@@ -452,8 +373,8 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                 )}
             </div>
 
-            {/* Footer: 4 Action Buttons in 2x2 Grid */}
-            <div className="grid grid-cols-2 gap-1.5 w-full pt-2 pb-1 border-t border-gray-100 dark:border-base-200">
+            {/* Footer: 3 Action Buttons */}
+            <div className="grid grid-cols-3 gap-1.5 w-full pt-2 pb-1 border-t border-gray-100 dark:border-base-200">
                 {/* 1. 切换（点击向上展开 4 个客户端微标选项） */}
                 <AccountSwitchMenu
                     accountId={account.id}
@@ -481,26 +402,7 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                     <span>{t('accounts.action_refresh', '刷新')}</span>
                 </button>
 
-                {/* 3. 启停 */}
-                <button
-                    type="button"
-                    disabled={isBanned}
-                    onClick={(e) => { e.stopPropagation(); onToggleProxy(); }}
-                    className={cn(
-                        "flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-all",
-                        isBanned
-                            ? "bg-gray-100 dark:bg-base-200 text-gray-400 dark:text-gray-600 cursor-not-allowed"
-                            : account.proxy_disabled
-                                ? "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/50"
-                                : "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50"
-                    )}
-                    title={isBanned ? t('accounts.banned_tooltip', '账号已被上游封禁') : (account.proxy_disabled ? t('accounts.enable_proxy', '启用反代') : t('accounts.disable_proxy', '禁用反代'))}
-                >
-                    <Power className="w-3.5 h-3.5" />
-                    <span>{account.proxy_disabled ? t('accounts.action_enable', '启用') : t('accounts.action_disable', '停用')}</span>
-                </button>
-
-                {/* 4. 更多 */}
+                {/* 3. 更多 */}
                 <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); setIsActionsModalOpen(true); }}
@@ -519,10 +421,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, ac
                 account={account}
                 onSwitch={onSwitch}
                 onWarmup={onWarmup}
-                onViewDevice={() => {
-                    setIsActionsModalOpen(false);
-                    onViewDevice();
-                }}
                 onViewDetails={() => {
                     setIsActionsModalOpen(false);
                     onViewDetails();

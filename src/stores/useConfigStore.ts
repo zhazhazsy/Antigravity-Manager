@@ -25,11 +25,8 @@ let saveSequence = 0;
 
 async function flushPersist(config: AppConfig): Promise<void> {
     await configService.saveConfig(config);
-    const { isTauri } = await import('../utils/env');
-    if (isTauri()) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_window_theme', { theme: config.theme }).catch(() => {});
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_window_theme', { theme: config.theme }).catch(() => {});
 }
 
 async function executeSaveQueue(config: AppConfig): Promise<void> {
@@ -75,8 +72,6 @@ interface ConfigState {
     updateLanguage: (language: string) => Promise<void>;
     toggleShowAllQuotas: () => void;
     showAllQuotas: boolean;
-    toggleMenuItem: (path: string) => Promise<void>;
-    isMenuItemHidden: (path: string) => boolean;
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => ({
@@ -98,11 +93,10 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     saveConfig: async (config: AppConfig, silent: boolean = false) => {
         const currentSeq = ++saveSequence;
         // 1. 同步立即乐观更新 Zustand store 状态
-        // 确保所有订阅组件与后续读操作即刻获取最新配置，彻底消灭渲染时差与闭包陈旧值
         set({ config, loading: !silent, error: null });
 
         try {
-            // 2. 串行/尾随有序持久化，杜绝连续点击触发并发写竞态
+            // 2. 串行/尾随有序持久化
             await executeSaveQueue(config);
             if (currentSeq === saveSequence) {
                 set({ loading: false });
@@ -124,11 +118,8 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         const newConfig = { ...latest, theme };
         await get().saveConfig(newConfig, true);
 
-        const { isTauri } = await import('../utils/env');
-        if (isTauri()) {
-            const { emit } = await import('@tauri-apps/api/event');
-            await emit('app://theme-changed', { theme }).catch(() => {});
-        }
+        const { emit } = await import('@tauri-apps/api/event');
+        await emit('app://theme-changed', { theme }).catch(() => {});
     },
 
     updateLanguage: async (language: string) => {
@@ -150,11 +141,8 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         await i18n.changeLanguage(normalized);
         await savePromise;
 
-        const { isTauri } = await import('../utils/env');
-        if (isTauri()) {
-            const { emit } = await import('@tauri-apps/api/event');
-            await emit('app://language-changed', { language: normalized }).catch(() => {});
-        }
+        const { emit } = await import('@tauri-apps/api/event');
+        await emit('app://language-changed', { language: normalized }).catch(() => {});
     },
 
     toggleShowAllQuotas: () => {
@@ -162,26 +150,5 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         const next = !current;
         localStorage.setItem('antigravity_show_all_quotas', String(next));
         set({ showAllQuotas: next });
-    },
-
-    toggleMenuItem: async (path: string) => {
-        const { config } = get();
-        if (!config) return;
-
-        const hiddenItems = config.hidden_menu_items || [];
-        const isHidden = hiddenItems.includes(path);
-
-        const newHiddenItems = isHidden
-            ? hiddenItems.filter(item => item !== path)
-            : [...hiddenItems, path];
-
-        const newConfig = { ...config, hidden_menu_items: newHiddenItems };
-        await get().saveConfig(newConfig, true);
-    },
-
-    isMenuItemHidden: (path: string) => {
-        const { config } = get();
-        if (!config) return false;
-        return (config.hidden_menu_items || []).includes(path);
     },
 }));

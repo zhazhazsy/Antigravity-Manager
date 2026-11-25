@@ -8,7 +8,6 @@ import {
     ArrowRightLeft,
     Tag,
     Sparkles,
-    Smartphone,
     Info,
     Download,
     Trash2,
@@ -29,7 +28,6 @@ export interface AccountActionsModalProps {
     account: Account;
     onSwitch: (targetIde: 'classic' | 'ide' | 'agy' | 'acp') => void;
     onWarmup?: () => void;
-    onViewDevice: () => void;
     onViewDetails: () => void;
     onExport: () => void;
     onUpdateLabel?: (newLabel: string) => Promise<void> | void;
@@ -47,7 +45,6 @@ export default function AccountActionsModal({
     account,
     onSwitch,
     onWarmup,
-    onViewDevice,
     onViewDetails,
     onExport,
     onUpdateLabel,
@@ -369,26 +366,6 @@ export default function AccountActionsModal({
                                             </div>
                                         </button>
                                     )}
-
-                                    {/* Device Fingerprint */}
-                                    <button
-                                        onClick={onViewDevice}
-                                        className="w-full flex items-center justify-between p-3 rounded-xl border border-gray-200 dark:border-base-200 hover:border-teal-500 dark:hover:border-teal-500 hover:bg-teal-50/40 dark:hover:bg-teal-500/10 transition-all text-left group"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 rounded-lg bg-teal-50 text-teal-600 dark:bg-teal-500/15 dark:text-teal-400 flex-shrink-0">
-                                                <Smartphone size={18} />
-                                            </div>
-                                            <div>
-                                                <div className="text-xs font-semibold text-gray-900 dark:text-base-content">
-                                                    {t('accounts.actions_modal.tools.fingerprint')}
-                                                </div>
-                                                <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                                                    {t('accounts.actions_modal.tools.fingerprint_desc')}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </button>
 
                                     {/* Account Details */}
                                     <button

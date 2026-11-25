@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Database, Globe, Loader2, CheckCircle2, XCircle, Copy, Check, Info, Link2 } from 'lucide-react';
+import { Plus, Database, Globe, Loader2, CheckCircle2, XCircle, Copy, Check, Link2 } from 'lucide-react';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { request as invoke } from '../../utils/request';
-import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
 import * as accountService from '../../services/accountService';
 
@@ -21,7 +20,7 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
     const { t } = useTranslation();
     const fetchAccounts = useAccountStore(state => state.fetchAccounts);
     const [isOpen, setIsOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'oauth' | 'token' | 'import'>(isTauri() ? 'oauth' : 'token');
+    const [activeTab, setActiveTab] = useState<'oauth' | 'token' | 'import'>('oauth');
     const [accountType, setAccountType] = useState<'personal' | 'enterprise'>('personal');
     const [refreshToken, setRefreshToken] = useState('');
     const [oauthUrl, setOauthUrl] = useState('');
@@ -55,13 +54,11 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
 
     // Listen for OAuth URL
     useEffect(() => {
-        if (!isTauri()) return;
         let unlisten: (() => void) | undefined;
 
         const setupListener = async () => {
             unlisten = await listen('oauth-url-generated', (event) => {
                 setOauthUrl(event.payload as string);
-                // 自动复制到剪贴板? 可选，这里只设置状态让用户手动复制
             });
         };
 
@@ -74,7 +71,6 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
 
     // Listen for OAuth callback completion (user may open the URL manually without clicking Start)
     useEffect(() => {
-        if (!isTauri()) return;
         let unlisten: (() => void) | undefined;
 
         const setupListener = async () => {
@@ -276,82 +272,7 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         }
     };
 
-    const handleOAuthWeb = async () => {
-        try {
-            setStatus('loading');
-            setMessage(t('accounts.add.oauth.btn_start') + '...');
-
-            const clientKey = accountType === 'enterprise' ? 'antigravity_gcp' : 'antigravity_enterprise';
-
-            // 1. 获取 URL (复用已有 URL，避免重复触发 prepare_oauth_url 导致后端 Flow 状态被覆盖重置)
-            let url = oauthUrl;
-            if (!url) {
-                url = await accountService.prepareOAuthUrl(clientKey);
-
-                if (!url) {
-                    throw new Error(t('accounts.add.oauth.error_no_url', 'OAuth URLを取得できませんでした'));
-                }
-                setOauthUrl(url); // 确保链接在 UI 中可见，方便用户手动复制
-            }
-
-            // 2. 打开新标签页 (响应用户反馈：Web 端直接使用新标签体验更好)
-            const popup = window.open(url, '_blank');
-
-            if (!popup) {
-                setStatus('error');
-                setMessage(t('accounts.add.oauth.popup_blocked', 'ポップアップがブロックされました'));
-                return;
-            }
-
-            // 3. 监听消息
-            const handleMessage = async (event: MessageEvent) => {
-                // 安全检查: 严格校验消息来源为当前同源 origin
-                if (event.origin && event.origin !== window.location.origin) {
-                    return;
-                }
-                if (event.data?.type === 'oauth-success') {
-                    popup.close();
-                    window.removeEventListener('message', handleMessage);
-
-                    // 4. 成功后刷新列表
-                    await fetchAccounts();
-
-                    setStatus('success');
-                    setMessage(t('accounts.add.oauth_success') || t('common.success'));
-
-                    setTimeout(() => {
-                        setIsOpen(false);
-                        resetState();
-                    }, 1500);
-                }
-            };
-
-            window.addEventListener('message', handleMessage);
-
-            // 5. 检测窗口关闭 (用户手动关闭)
-            const timer = setInterval(() => {
-                if (popup.closed) {
-                    clearInterval(timer);
-                    window.removeEventListener('message', handleMessage);
-                    if (statusRef.current === 'loading') { // 如果还在 loading 状态就关闭了，说明取消了
-                        setStatus('idle');
-                        setMessage('');
-                    }
-                }
-            }, 1000);
-
-        } catch (error) {
-            console.error('OAuth Web Error:', error);
-            setStatus('error');
-            setMessage(`${t('common.error')}: ${error}`);
-        }
-    };
-
     const handleOAuth = () => {
-        if (!isTauri()) {
-            handleOAuthWeb();
-            return;
-        }
         const clientKey = accountType === 'enterprise' ? 'antigravity_gcp' : 'antigravity_enterprise';
         // Default flow: opens the default browser and completes automatically.
         // (If user opened the URL manually, completion is also triggered by oauth-callback-received.)
@@ -431,10 +352,6 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
 
     const handleImportCustomDb = async () => {
         try {
-            if (!isTauri()) {
-                alert(t('common.tauri_api_not_loaded') || 'Storage import only works in desktop app.');
-                return;
-            }
             const selected = await open({
                 multiple: false,
                 filters: [{
@@ -565,14 +482,6 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                             </button>
                         </div>
 
-                        {/* 添加 Web 模式提示 */}
-                        {!isTauri() && (
-                            <div className="alert alert-info mb-4 text-xs py-2 flex items-center gap-2 bg-blue-50 dark:bg-blue-900/10 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-800">
-                                <Info className="w-4 h-4" />
-                                <span>{t('accounts.add.oauth.web_hint', '将在新窗口中打开 Google 登录页')}</span>
-                            </div>
-                        )}
-
                         {/* 状态提示区 */}
                         <StatusAlert />
 
@@ -630,27 +539,20 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                                                     </span>
                                                 </button>
 
-                                                {isTauri() && (
-                                                    <button
-                                                        type="button"
-                                                        className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                                                        onClick={handleCompleteOAuth}
-                                                        disabled={status === 'loading' || status === 'success'}
-                                                    >
-                                                        <CheckCircle2 className="w-4 h-4" />
-                                                        {t('accounts.add.oauth.btn_finish')}
-                                                    </button>
-                                                )}
+                                                <button
+                                                    type="button"
+                                                    className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                                                    onClick={handleCompleteOAuth}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                >
+                                                    <CheckCircle2 className="w-4 h-4" />
+                                                    {t('accounts.add.oauth.btn_finish')}
+                                                </button>
                                             </div>
                                         )}
 
                                         {/* Manual Code Entry - Always enabled to rescue stuck flows */}
                                         <div className="pt-4 mt-2 border-t border-gray-100 dark:border-base-200">
-                                            {!isTauri() && (
-                                                <div className="mb-2.5 p-2.5 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/30 rounded-xl text-[11px] text-blue-700 dark:text-blue-300 leading-relaxed text-left">
-                                                    {t('accounts.add.oauth.remote_hint')}
-                                                </div>
-                                            )}
                                             <div className="text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-2 uppercase tracking-wider">
                                                 {t('accounts.add.oauth.manual_hint')}
                                             </div>

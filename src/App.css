@@ -66,17 +66,6 @@ body:not(.mini-window) {
   background-color: #09090b;
 }
 
-/* LobeHub UI flex center fallback for @lobehub/icons avatar components */
-.lobe-flex {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  line-height: 0 !important;
-}
-.lobe-flex svg {
-  display: block;
-}
-
 /* Dark mode override for body strictly */
 .dark body:not(.mini-window) {
   background-color: #0f172a;

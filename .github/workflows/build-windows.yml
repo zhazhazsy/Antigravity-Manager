@@ -12,11 +12,6 @@ on:
           - nsis
           - all
           - portable
-      build_headless_server:
-        description: "是否额外编译纯后端无界面服务 (antigravity-server.exe)"
-        required: false
-        default: false
-        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -116,19 +111,10 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build Windows Headless Server (Optional)
-        if: ${{ inputs.build_headless_server == true }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          cargo build --release --bin antigravity-server --manifest-path src-tauri/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Collect Windows Packages & Generate Checksums
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.prep.outputs.version }}
-          BUILD_HEADLESS: ${{ inputs.build_headless_server }}
         run: |
           $ErrorActionPreference = "Stop"
           $outDir = "artifacts-windows"
@@ -155,21 +141,7 @@ jobs:
             Remove-Item -Recurse -Force "portable-stage"
           }
 
-          # 3. 封装可选的无界面纯后端版 (.zip = antigravity-server.exe + dist/)
-          $serverExe = "src-tauri/target/release/antigravity-server.exe"
-          if ($env:BUILD_HEADLESS -eq "true" -and (Test-Path $serverExe)) {
-            $serverStage = "server-stage/antigravity-server"
-            New-Item -ItemType Directory -Force -Path $serverStage | Out-Null
-            Copy-Item -Path $serverExe -Destination $serverStage -Force
-            if (Test-Path "dist") {
-              Copy-Item -Path "dist" -Destination (Join-Path $serverStage "dist") -Recurse -Force
-            }
-            $serverZip = Join-Path $outDir "Antigravity.Server_$($env:APP_VERSION)_x64-headless.zip"
-            Compress-Archive -Path "$serverStage/*" -DestinationPath $serverZip -Force
-            Remove-Item -Recurse -Force "server-stage"
-          }
-
-          # 4. 生成构建摘要与 SHA256 校验表
+          # 3. 生成构建摘要与 SHA256 校验表
           $files = Get-ChildItem -Path $outDir -File
           if ($files.Count -eq 0) {
             Write-Error "No build artifacts were generated in $outDir!"

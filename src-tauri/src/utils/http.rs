@@ -1,9 +1,10 @@
 use crate::modules::config::load_app_config;
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use rquest::{Client, Proxy};
+use rquest::{Client, Proxy, StatusCode};
 use rquest_util::Emulation;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// 共享客户端的身份：决定超时长度与是否启用 JA3/TLS 仿真。
 ///
@@ -154,6 +155,176 @@ fn create_standard_client(timeout_secs: u64) -> Client {
 }
 
 #[cfg(test)]
+static TEST_HTTP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn extract_endpoint_host(url_or_host: &str) -> &str {
+    let s = if let Some(stripped) = url_or_host.strip_prefix("https://") {
+        stripped
+    } else if let Some(stripped) = url_or_host.strip_prefix("http://") {
+        stripped
+    } else {
+        url_or_host
+    };
+    let host_part = s.split('/').next().unwrap_or(s);
+    host_part.split(':').next().unwrap_or(host_part)
+}
+
+pub fn should_try_next_endpoint(status: StatusCode) -> bool {
+    status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::NOT_FOUND
+        || status.is_server_error()
+}
+
+pub fn is_sandbox_endpoint(endpoint_or_host: &str) -> bool {
+    let host = extract_endpoint_host(endpoint_or_host);
+    host.contains("sandbox.googleapis.com")
+}
+
+pub fn should_try_next_endpoint_for_url(status: StatusCode, endpoint_url: &str) -> bool {
+    if status == StatusCode::BAD_REQUEST {
+        let host = extract_endpoint_host(endpoint_url);
+        is_sandbox_endpoint(host) || host.contains("sandbox")
+    } else {
+        should_try_next_endpoint(status)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EndpointHealthTracker {
+    failures: Arc<DashMap<String, std::time::Instant>>,
+    cooldown: std::time::Duration,
+}
+
+impl EndpointHealthTracker {
+    pub fn new(cooldown: std::time::Duration) -> Self {
+        Self {
+            failures: Arc::new(DashMap::new()),
+            cooldown,
+        }
+    }
+
+    pub fn mark_failure(&self, endpoint: &str) {
+        let host = extract_endpoint_host(endpoint);
+        let now = std::time::Instant::now();
+        self.failures.insert(host.to_string(), now);
+        let cd_secs = if is_sandbox_endpoint(host) {
+            self.cooldown
+                .max(std::time::Duration::from_secs(300))
+                .as_secs()
+        } else {
+            self.cooldown.as_secs()
+        };
+        tracing::warn!(
+            host = %host,
+            endpoint = %endpoint,
+            cooldown_secs = cd_secs,
+            "Marked upstream endpoint host as unhealthy (entering cooldown)"
+        );
+    }
+
+    pub fn mark_success(&self, endpoint: &str) {
+        let host = extract_endpoint_host(endpoint);
+        if self.failures.remove(host).is_some() {
+            tracing::info!(
+                host = %host,
+                endpoint = %endpoint,
+                "Upstream endpoint host recovered and marked healthy"
+            );
+        }
+    }
+
+    pub fn is_healthy(&self, endpoint: &str) -> bool {
+        let host = extract_endpoint_host(endpoint);
+        let cd = if is_sandbox_endpoint(host) {
+            self.cooldown.max(std::time::Duration::from_secs(300))
+        } else {
+            self.cooldown
+        };
+        if let Some(entry) = self.failures.get(host) {
+            let last_fail = *entry.value();
+            if last_fail.elapsed() >= cd {
+                drop(entry);
+                self.failures.remove(host);
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn get_ordered_endpoints<'a>(&self, default_endpoints: &[&'a str]) -> Vec<&'a str> {
+        self.get_ordered_endpoints_with_preference(default_endpoints, false)
+    }
+
+    pub fn get_ordered_endpoints_with_preference<'a>(
+        &self,
+        default_endpoints: &[&'a str],
+        prefer_healthy_sandbox: bool,
+    ) -> Vec<&'a str> {
+        let mut healthy_primary = Vec::new();
+        let mut unhealthy_primary = Vec::new();
+        let mut healthy_sandbox = Vec::new();
+        let mut unhealthy_sandbox = Vec::new();
+
+        for &ep in default_endpoints {
+            let host = extract_endpoint_host(ep);
+            let is_sandbox = is_sandbox_endpoint(host);
+            let cd = if is_sandbox {
+                self.cooldown.max(std::time::Duration::from_secs(300))
+            } else {
+                self.cooldown
+            };
+
+            let mut fail_time = None;
+            if let Some(entry) = self.failures.get(host) {
+                let last_fail = *entry.value();
+                if last_fail.elapsed() >= cd {
+                    drop(entry);
+                    self.failures.remove(host);
+                } else {
+                    fail_time = Some(last_fail);
+                }
+            }
+
+            match (is_sandbox, fail_time) {
+                (false, None) => healthy_primary.push(ep),
+                (false, Some(t)) => unhealthy_primary.push((ep, t)),
+                (true, None) => healthy_sandbox.push(ep),
+                (true, Some(t)) => unhealthy_sandbox.push((ep, t)),
+            }
+        }
+
+        unhealthy_primary.sort_by_key(|&(_, time)| time);
+        unhealthy_sandbox.sort_by_key(|&(_, time)| time);
+
+        let mut result = healthy_primary;
+        if prefer_healthy_sandbox {
+            result.extend(healthy_sandbox);
+            for (ep, _) in unhealthy_primary {
+                result.push(ep);
+            }
+        } else {
+            for (ep, _) in unhealthy_primary {
+                result.push(ep);
+            }
+            result.extend(healthy_sandbox);
+        }
+        for (ep, _) in unhealthy_sandbox {
+            result.push(ep);
+        }
+        result
+    }
+}
+
+impl Default for EndpointHealthTracker {
+    fn default() -> Self {
+        Self::new(std::time::Duration::from_secs(30))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -163,7 +334,7 @@ mod tests {
 
     #[test]
     fn shared_client_is_cached_until_invalidated() {
-        let _guard = crate::proxy::config::TEST_CONFIG_LOCK
+        let _guard = TEST_HTTP_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         invalidate_shared_clients();
@@ -187,7 +358,7 @@ mod tests {
     /// 否则它们会带着**旧代理**继续跑（token 刷新 / 配额刷新 / 项目解析）。
     #[test]
     fn invalidate_drops_clients_so_they_rebuild_with_current_proxy() {
-        let _guard = crate::proxy::config::TEST_CONFIG_LOCK
+        let _guard = TEST_HTTP_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
 

@@ -5,8 +5,7 @@ import {
     ArrowRight, Check, ChevronDown, Shuffle, Power, Feather, Copy, Pin, X,
     Sparkles, Bot
 } from 'lucide-react';
-import { Gemini } from '@lobehub/icons';
-import { useViewStore } from '../../stores/useViewStore';
+import { Gemini } from '../common/BrandIcons';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { isTauri } from '../../utils/env';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -111,7 +110,6 @@ function MiniQuotaRow({
 }
 
 export default function MiniView() {
-    const { setMiniView } = useViewStore();
     const {
         accounts,
         currentAccount,
@@ -299,31 +297,21 @@ export default function MiniView() {
     };
 
     const handleClose = async () => {
-        if (isTauri()) {
-            await invoke('hide_mini_view').catch(() => {});
-        } else {
-            setMiniView(false);
-        }
+        await invoke('hide_mini_view').catch(() => {});
     };
 
     const handleMaximize = () => {
-        if (isTauri()) {
-            // 原子化唤起主控制台并在未置顶时安全收起迷你视窗，由后端主线程统一调度避免消息死锁
-            invoke('switch_to_main_window').catch((err) => {
-                console.error('Failed to switch to main window:', err);
-            });
-        } else {
-            setMiniView(false);
-        }
+        // 原子化唤起主控制台并在未置顶时安全收起迷你视窗，由后端主线程统一调度避免消息死锁
+        invoke('switch_to_main_window').catch((err) => {
+            console.error('Failed to switch to main window:', err);
+        });
     };
 
     const handleQuitApp = async () => {
-        if (isTauri()) {
-            try {
-                await invoke('exit_app');
-            } catch (e) {
-                console.error('Failed to exit app:', e);
-            }
+        try {
+            await invoke('exit_app');
+        } catch (e) {
+            console.error('Failed to exit app:', e);
         }
     };
 
@@ -348,7 +336,7 @@ export default function MiniView() {
 
     const availableAccounts = useMemo(() => {
         return accounts.filter(
-            a => !a.disabled && !a.proxy_disabled && !isAccountAbnormal(a)
+            a => !a.disabled && !isAccountAbnormal(a)
         );
     }, [accounts]);
 
@@ -619,10 +607,7 @@ export default function MiniView() {
     ];
 
     return (
-        <div className={clsx(
-            "w-full h-full flex flex-col bg-white/95 dark:bg-[#15161a]/95 backdrop-blur-2xl rounded-2xl border border-gray-200/80 dark:border-white/[0.12] overflow-hidden select-none",
-            !isTauri() && "shadow-2xl"
-        )}>
+        <div className="w-full h-full flex flex-col bg-white/95 dark:bg-[#15161a]/95 backdrop-blur-2xl rounded-2xl border border-gray-200/80 dark:border-white/[0.12] overflow-hidden select-none">
             {/* 1. 顶栏：macOS 风格分段 Tab 与快捷工具 */}
             <div
                 className="flex-none flex items-center justify-between pl-2 pr-3 py-1.5 bg-gray-50/80 dark:bg-white/[0.03] rounded-t-2xl border-b border-gray-100 dark:border-white/[0.06] select-none cursor-default"
@@ -632,9 +617,7 @@ export default function MiniView() {
                     if (target.closest('button, a, input, select, textarea, [data-no-drag="true"]')) {
                         return;
                     }
-                    if (isTauri()) {
-                        getCurrentWindow().startDragging().catch(() => {});
-                    }
+                    getCurrentWindow().startDragging().catch(() => {});
                 }}
             >
                 {/* 3 应用客户端 Tab + 全池胶囊 */}
@@ -691,9 +674,7 @@ export default function MiniView() {
                     data-tauri-drag-region
                     onMouseDown={(e) => {
                         e.preventDefault();
-                        if (isTauri()) {
-                            getCurrentWindow().startDragging().catch(() => {});
-                        }
+                        getCurrentWindow().startDragging().catch(() => {});
                     }}
                 />
 

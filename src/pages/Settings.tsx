@@ -1,15 +1,11 @@
 import { useState, useEffect, startTransition } from 'react';
-import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, KeyRound, Copy, Check, ShieldAlert } from 'lucide-react';
+import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, Network, Globe, Send } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useConfigStore } from '../stores/useConfigStore';
-import { AppConfig, HubFingerprint } from '../types/config';
+import { AppConfig } from '../types/config';
 import ModalDialog from '../components/common/ModalDialog';
-import HelpTooltip from '../components/common/HelpTooltip';
 import { showToast } from '../components/common/ToastContainer';
-import { copyToClipboard } from '../utils/clipboard';
-import { cn } from '../utils/cn';
-import QuotaProtection from '../components/settings/QuotaProtection';
 import SmartWarmup from '../components/settings/SmartWarmup';
 import ClassicAutoSwitch from '../components/settings/ClassicAutoSwitch';
 import { useDebugConsole } from '../stores/useDebugConsole';
@@ -20,9 +16,9 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { emit } from '@tauri-apps/api/event';
 
 import DebugConsole from '../components/debug/DebugConsole';
-import ProxyPoolSettings from '../components/settings/ProxyPoolSettings';
 import { motion } from 'framer-motion';
 import { ZOOM_LEVELS, getStoredZoom, applyZoom } from '../utils/zoom';
+import { cn } from '../utils/cn';
 
 function normalizeDataDirDisplay(path: string): string {
     const trimmed = path.trim();
@@ -55,8 +51,6 @@ function Settings() {
         startup_refresh: true,
         refresh_concurrency: 5,
         refresh_slide_delay_secs: 0.2,
-        auto_sync: false,
-        sync_interval: 5,
         auto_switch_classic_depleted: false,
         classic_auto_switch: {
             enabled: false,
@@ -64,53 +58,15 @@ function Settings() {
             monitored_models: ['gemini', 'claude']
         },
         proxy: {
-            enabled: false,
-            port: 8080,
-            api_key: '',
-            auto_start: false,
-            request_timeout: 120,
-            enable_logging: false,
             upstream_proxy: {
                 enabled: false,
                 url: ''
-            },
-            debug_logging: {
-                enabled: false,
-                output_dir: undefined
-            } as { enabled: boolean; output_dir?: string },
-            proxy_pool: {
-                enabled: false,
-                proxies: [],
-                health_check_interval: 300,
-                auto_failover: true,
-                strategy: 'priority',
-                account_bindings: {}
             }
         },
         scheduled_warmup: {
             enabled: false,
             monitored_models: []
         },
-        quota_protection: {
-            enabled: false,
-            threshold_percentage: 10,
-            monitored_models: []
-        },
-        pinned_quota_models: {
-            models: ['gemini-3.1-pro-high', 'gemini-3.8-flash-high', 'gemini-3.1-flash-image', 'claude-opus-4-6-thinking']
-        },
-        cloudflared: {
-            enabled: false,
-            mode: 'quick',
-            port: 7860,
-            use_http2: true
-        },
-        circuit_breaker: {
-            enabled: true,
-            backoff_steps: [60, 300, 1800, 7200]
-        },
-        hidden_menu_items: [],  // 菜单显示设置：默认不隐藏任何菜单项
-
     });
 
     // Dialog state
@@ -160,18 +116,8 @@ function Settings() {
         };
     }, []);
 
-    // Official Hub fingerprint state
-    const [hubFingerprint, setHubFingerprint] = useState<HubFingerprint | null>(null);
-    const [detectingHub, setDetectingHub] = useState(false);
-    const [copiedHubUa, setCopiedHubUa] = useState(false);
-
     useEffect(() => {
         loadConfig();
-
-        // 获取当前 Hub 客户端指纹
-        invoke<HubFingerprint>('get_hub_fingerprint')
-            .then(fp => setHubFingerprint(fp))
-            .catch(err => console.error('Failed to get hub fingerprint:', err));
 
         // 获取真实数据目录路径
         invoke<string>('get_data_dir_path')
@@ -198,18 +144,14 @@ function Settings() {
             .catch(err => console.error('Failed to get auto launch status:', err));
 
         // 获取应用真实版本号
-        if (isTauri()) {
-            import('@tauri-apps/api/app').then(({ getVersion }) => {
-                getVersion().then(v => setAppVersion(v)).catch(() => {});
-            });
-        }
+        import('@tauri-apps/api/app').then(({ getVersion }) => {
+            getVersion().then(v => setAppVersion(v)).catch(() => {});
+        });
 
-        // 检测是否通过 Homebrew Cask 安装 (仅 Tauri 环境)
-        if (isTauri()) {
-            invoke<boolean>('check_homebrew_installation')
-                .then(installed => setIsBrewInstalled(installed))
-                .catch(err => console.error('Failed to check Homebrew installation:', err));
-        }
+        // 检测是否通过 Homebrew Cask 安装
+        invoke<boolean>('check_homebrew_installation')
+            .then(installed => setIsBrewInstalled(installed))
+            .catch(err => console.error('Failed to check Homebrew installation:', err));
 
     }, [loadConfig]);
 
@@ -233,80 +175,8 @@ function Settings() {
 
             await saveConfig(formData);
             showToast(t('common.saved'), 'success');
-
-            // 刷新当前 Hub 指纹状态
-            invoke<HubFingerprint>('get_hub_fingerprint')
-                .then(fp => setHubFingerprint(fp))
-                .catch(() => {});
-
-            // 如果修改了代理配置，提示用户需要重启
-            if (proxyEnabled && proxyUrl) {
-                showToast(t('proxy.config.upstream_proxy.restart_hint'), 'info');
-            }
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
-        }
-    };
-
-    const handleDetectHubFingerprint = async () => {
-        setDetectingHub(true);
-        try {
-            const fp = await invoke<HubFingerprint>('detect_remote_hub_fingerprint', {
-                customVersion: formData.proxy?.hub_version || null,
-                customCl: formData.proxy?.hub_cl || null,
-            });
-            setHubFingerprint(fp);
-
-            if (fp.update_available && fp.latest_remote_version) {
-                showToast(
-                    t('proxy.config.hub.detect_success_newer_available', {
-                        version: fp.version,
-                        cl: fp.cl,
-                        latest: fp.latest_remote_version,
-                        defaultValue: `官方已发布新版 v${fp.latest_remote_version}（当前出站安全沿用 v${fp.version}，更新本地客户端后再次探测可同步最新 CL）`
-                    }),
-                    'info',
-                    7000
-                );
-            } else if (fp.source === 'local') {
-                showToast(
-                    t('proxy.config.hub.detect_success_local', {
-                        version: fp.version,
-                        cl: fp.cl,
-                        defaultValue: `已从本地已安装的官方客户端同步指纹: v${fp.version} (CL: ${fp.cl})`
-                    }),
-                    'success'
-                );
-            } else if (fp.source === 'baseline') {
-                showToast(
-                    t('proxy.config.hub.detect_success_baseline', {
-                        version: fp.version,
-                        cl: fp.cl,
-                        defaultValue: `当前出站指纹已对齐官方稳态基准: v${fp.version} (CL: ${fp.cl})`
-                    }),
-                    'success'
-                );
-            } else {
-                showToast(
-                    t('proxy.config.hub.detect_success', {
-                        version: fp.version,
-                        cl: fp.cl,
-                        defaultValue: `已成功探测并同步官方最新 Hub: v${fp.version} (CL: ${fp.cl})`
-                    }),
-                    'success'
-                );
-            }
-        } catch (err) {
-            console.error('探测 Hub 失败:', err);
-            showToast(
-                t('proxy.config.hub.detect_failed', {
-                    error: String(err),
-                    defaultValue: `探测失败: ${err}`
-                }),
-                'error'
-            );
-        } finally {
-            setDetectingHub(false);
         }
     };
 
@@ -399,30 +269,6 @@ function Settings() {
             });
             if (selected && typeof selected === 'string') {
                 setFormData({ ...formData, antigravity_ide_executable: selected });
-            }
-        } catch (error) {
-            showToast(`${t('common.error')}: ${error}`, 'error');
-        }
-    };
-
-    const handleSelectDebugLogDir = async () => {
-        try {
-            const selected = await open({
-                directory: true,
-                multiple: false,
-                title: t('settings.advanced.debug_log_dir_select'),
-            });
-            if (selected && typeof selected === 'string') {
-                setFormData({
-                    ...formData,
-                    proxy: {
-                        ...formData.proxy,
-                        debug_logging: {
-                            enabled: formData.proxy?.debug_logging?.enabled ?? false,
-                            output_dir: selected,
-                        },
-                    },
-                });
             }
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
@@ -987,101 +833,6 @@ function Settings() {
                                 </div>
                             )}
 
-                                {/* 菜单显示设置 */}
-                                <div className="border-t border-gray-200 dark:border-base-200 pt-6 mt-6">
-                                    <h3 className="font-medium text-gray-900 dark:text-base-content mb-3">{t('settings.menu.title')}</h3>
-                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                                        {t('settings.menu.desc')}
-                                    </p>
-                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                        {[
-                                            { path: '/', label: t('nav.dashboard'), icon: LayoutDashboard },
-                                            { path: '/accounts', label: t('nav.accounts'), icon: Users },
-                                            { path: '/api-proxy', label: t('nav.proxy'), icon: Network },
-                                            { path: '/apikey-fun', label: t('nav.apikey_fun', '中转站'), icon: KeyRound },
-                                            { path: '/monitor', label: t('nav.call_records'), icon: Activity },
-                                            { path: '/token-stats', label: t('nav.token_stats'), icon: BarChart3 },
-                                            { path: '/user-token', label: t('nav.user_token', 'User Tokens'), icon: Users },
-                                            { path: '/security', label: t('nav.security'), icon: Lock },
-                                            { path: '/settings', label: t('nav.settings'), icon: SettingsIcon },
-                                        ].map((item) => {
-                                            const hiddenItems = formData.hidden_menu_items || [];
-                                            const isVisible = !hiddenItems.includes(item.path);
-                                            const isSettings = item.path === '/settings';
-
-                                            return (
-                                                <div
-                                                    key={item.path}
-                                                    onClick={async () => {
-                                                        if (!isSettings) {
-                                                            const originalConfig = { ...formData };
-                                                            const hiddenItems = formData.hidden_menu_items || [];
-                                                            const newHiddenItems = isVisible
-                                                                ? [...hiddenItems, item.path]
-                                                                : hiddenItems.filter(p => p !== item.path);
-
-                                                            // 乐观更新 UI
-                                                            const newConfig = {
-                                                                ...formData,
-                                                                hidden_menu_items: newHiddenItems
-                                                            };
-                                                            setFormData(newConfig);
-
-                                                            // 尝试保存
-                                                            try {
-                                                                await saveConfig(newConfig);
-                                                            } catch (error) {
-                                                                // 保存失败，回滚到原始快照
-                                                                setFormData(originalConfig);
-                                                                showToast(`保存失败，已恢复设置: ${error}`, 'error');
-                                                            }
-                                                        }
-                                                    }}
-                                                    className={`
-                                                        relative flex flex-col items-center justify-center gap-3 p-4 rounded-xl border-2 transition-all cursor-pointer select-none
-                                                        ${isSettings
-                                                            ? 'bg-gray-50 dark:bg-base-200 border-gray-100 dark:border-base-300 opacity-60 cursor-not-allowed'
-                                                            : isVisible
-                                                                ? 'bg-blue-50/50 dark:bg-blue-900/10 border-blue-500 dark:border-blue-500 shadow-sm'
-                                                                : 'bg-white dark:bg-base-100 border-gray-200 dark:border-base-300 hover:border-gray-300 dark:hover:border-base-content/20 text-gray-500'
-                                                        }
-                                                    `}
-                                                >
-                                                    {/* 选中标记 */}
-                                                    {isVisible && (
-                                                        <div className="absolute top-2 right-2 text-blue-500">
-                                                            <CheckCircle2 size={16} fill="currentColor" className="text-white dark:text-base-100" />
-                                                        </div>
-                                                    )}
-
-                                                    {isSettings && (
-                                                        <div className="absolute top-2 right-2 text-xs font-bold text-gray-400 bg-gray-200 dark:bg-base-300 px-1.5 py-0.5 rounded">
-                                                            {t('settings.menu.required')}
-                                                        </div>
-                                                    )}
-
-                                                    <div className={`
-                                                        p-3 rounded-xl transition-colors
-                                                        ${isVisible
-                                                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                                                            : 'bg-gray-100 dark:bg-base-200 text-gray-400 dark:text-base-content/50'
-                                                        }
-                                                    `}>
-                                                        <item.icon size={24} />
-                                                    </div>
-
-                                                    <span className={`font-medium text-sm ${isVisible ? 'text-blue-900 dark:text-blue-100' : 'text-gray-500'}`}>
-                                                        {item.label}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-4 flex items-center gap-1.5">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-gray-400"></div>
-                                        {t('settings.menu.selected_items_note')}
-                                    </p>
-                                </div>
                         </div>
                     )}
 
@@ -1100,12 +851,11 @@ function Settings() {
                                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.account.auto_refresh_desc')}</p>
                                         </div>
                                     </div>
-                                    <label className={`relative inline-flex items-center ${formData.quota_protection.enabled ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'}`}>
+                                    <label className="relative inline-flex items-center cursor-pointer">
                                         <input
                                             type="checkbox"
                                             className="sr-only peer"
                                             checked={formData.auto_refresh}
-                                            disabled={formData.quota_protection.enabled}
                                             onChange={async (e) => {
                                                 const enabled = e.target.checked;
                                                 const newConfig = { ...formData, auto_refresh: enabled };
@@ -1118,7 +868,7 @@ function Settings() {
                                                 }
                                             }}
                                         />
-                                        <div className={`w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500 shadow-inner ${formData.quota_protection.enabled ? 'peer-checked:bg-blue-500' : ''}`}></div>
+                                        <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500 shadow-inner"></div>
                                     </label>
                                 </div>
 
@@ -1213,35 +963,6 @@ function Settings() {
                                             scheduled_warmup: newConfig
                                         };
                                         setFormData(newFormData);
-                                        // Hot Save
-                                        try {
-                                            await saveConfig(newFormData);
-                                        } catch (error) {
-                                            showToast(`${t('common.error')}: ${error}`, 'error');
-                                        }
-                                    }}
-                                />
-                            </div>
-
-                            {/* 配额保护 (Quota Protection) */}
-                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-rose-200 transition-all duration-300 shadow-sm">
-                                <QuotaProtection
-                                    config={formData.quota_protection}
-                                    onChange={async (newConfig) => {
-                                        const updates: any = {
-                                            quota_protection: newConfig
-                                        };
-                                        // 联动逻辑：开启配额保护时，强制开启后台自动刷新 (不仅仅是预热)
-                                        if (newConfig.enabled) {
-                                            updates.auto_refresh = true;
-                                        }
-
-                                        const newFormData = {
-                                            ...formData,
-                                            ...updates
-                                        };
-                                        setFormData(newFormData);
-
                                         // Hot Save
                                         try {
                                             await saveConfig(newFormData);
@@ -1413,36 +1134,8 @@ function Settings() {
                                         )}
                                     </div>
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                                        {t('settings.advanced.antigravity_cli_path_desc', '设置您的命令行客户端 (agy) 的可执行文件路径，用于一键解除账号限制。')}
+                                        {t('settings.advanced.antigravity_cli_path_desc', '设置您的命令行客户端 (agy) 的可执行文件路径。')}
                                     </p>
-                                    
-                                    {/* 新增：解密/修补准入限制一键修补按钮 */}
-                                    <div className={`mt-3 flex items-center gap-4 p-3 rounded-lg border ${formData.antigravity_cli_executable ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-100 dark:border-blue-900/30' : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`}>
-                                        <div className="flex-1">
-                                            <h4 className={`text-sm font-semibold ${formData.antigravity_cli_executable ? 'text-blue-900 dark:text-blue-200' : 'text-gray-500 dark:text-gray-400'}`}>
-                                                {t('settings.advanced.patch_eligibility_title', '账号准入限制解除')}
-                                            </h4>
-                                            <p className={`text-xs mt-0.5 ${formData.antigravity_cli_executable ? 'text-blue-700 dark:text-blue-300/80' : 'text-gray-400 dark:text-gray-500'}`}>
-                                                {t('settings.advanced.patch_eligibility_desc', '新版 agy 二进制强制拦截未授权账号，此操作一键跳过本地准入拦截检查。')}
-                                                {!formData.antigravity_cli_executable && " (需先在上方设置或探测路径)"}
-                                            </p>
-                                        </div>
-                                        <button
-                                            className={`px-4 py-2 rounded-lg transition-colors font-medium text-sm shadow-sm ${formData.antigravity_cli_executable ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'}`}
-                                            disabled={!formData.antigravity_cli_executable}
-                                            onClick={async () => {
-                                                if (!formData.antigravity_cli_executable) return;
-                                                try {
-                                                    const res = await invoke<string>('patch_agy_binary', { filePath: formData.antigravity_cli_executable });
-                                                    showToast(res, 'success');
-                                                } catch (err) {
-                                                    showToast(String(err), 'error');
-                                                }
-                                            }}
-                                        >
-                                            {t('settings.advanced.patch_btn', '一键解除')}
-                                        </button>
-                                    </div>
                                 </div>
 
                                 {/* Antigravity IDE 程序路径 */}
@@ -1466,18 +1159,12 @@ function Settings() {
                                                 {t('common.clear')}
                                             </button>
                                         )}
-                                        {isTauri() ? (
-                                            <button
-                                                className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors"
-                                                onClick={handleSelectAntigravityIdePath}
-                                            >
-                                                {t('settings.advanced.select_btn')}
-                                            </button>
-                                        ) : (
-                                            <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
-                                            </span>
-                                        )}
+                                        <button
+                                            className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors"
+                                            onClick={handleSelectAntigravityIdePath}
+                                        >
+                                            {t('settings.advanced.select_btn')}
+                                        </button>
                                     </div>
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
                                         {t('settings.advanced.antigravity_ide_path_desc', 'Specify the executable path for Antigravity IDE (code editor). Once set, account switching will strictly protect processes at this path from being terminated.')}
@@ -1520,123 +1207,6 @@ function Settings() {
                                     </p>
                                 </div>
 
-                                {/* 官方 Hub 客户端指纹与动态探测 */}
-                                <div className="border-t border-gray-200 dark:border-base-200 pt-4">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <h3 className="font-medium text-gray-900 dark:text-base-content">
-                                                {t('proxy.config.hub.title', { defaultValue: '官方 Hub 客户端指纹' })}
-                                            </h3>
-                                            <HelpTooltip text={t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })} />
-                                            {hubFingerprint && (
-                                                <span className={cn(
-                                                    "text-xs px-2 py-0.5 rounded-full font-mono font-medium",
-                                                    hubFingerprint.source === 'custom' && "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-                                                    hubFingerprint.source === 'remote' && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-                                                    hubFingerprint.source === 'local' && "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-                                                    hubFingerprint.source === 'baseline' && "bg-gray-100 text-gray-700 dark:bg-base-300 dark:text-gray-300",
-                                                )}>
-                                                    {hubFingerprint.source === 'custom' ? t('proxy.config.hub.source_custom', { defaultValue: '自定义' })
-                                                        : hubFingerprint.source === 'remote' ? t('proxy.config.hub.source_remote', { defaultValue: '远端探测' })
-                                                        : hubFingerprint.source === 'local' ? t('proxy.config.hub.source_local', { defaultValue: '本地应用' })
-                                                        : t('proxy.config.hub.source_baseline', { defaultValue: '稳态基准' })}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={handleDetectHubFingerprint}
-                                            disabled={detectingHub}
-                                            className="px-3 py-1.5 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors text-sm flex items-center gap-1.5"
-                                        >
-                                            <RefreshCw className={cn("w-3.5 h-3.5", detectingHub && "animate-spin")} />
-                                            <span>{t('proxy.config.hub.detect_button', { defaultValue: '动态探测' })}</span>
-                                        </button>
-                                    </div>
-
-                                    {/* 生效的 User-Agent 预览 */}
-                                    <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-3 text-xs font-mono text-gray-700 dark:text-gray-300 break-all select-all flex items-center justify-between gap-2 mb-3">
-                                        <span className="truncate">
-                                            {hubFingerprint?.user_agent || 'antigravity/hub/2.23.1 (...) cl=998881661'}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                if (hubFingerprint?.user_agent) {
-                                                    copyToClipboard(hubFingerprint.user_agent);
-                                                    setCopiedHubUa(true);
-                                                    setTimeout(() => setCopiedHubUa(false), 2000);
-                                                }
-                                            }}
-                                            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors shrink-0"
-                                            title={t('common.copy')}
-                                        >
-                                            {copiedHubUa ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-                                        </button>
-                                    </div>
-
-                                    {/* Hub Version & CL 自定义输入框 */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                                {t('proxy.config.hub.version_label', { defaultValue: 'Hub 版本号 (Version)' })}
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={formData.proxy?.hub_version || ''}
-                                                onChange={(e) => {
-                                                    const v = e.target.value.trim();
-                                                    setFormData({
-                                                        ...formData,
-                                                        proxy: {
-                                                            ...formData.proxy,
-                                                            hub_version: v || undefined,
-                                                        }
-                                                    });
-                                                }}
-                                                placeholder={hubFingerprint?.version || '2.23.1 (自动)'}
-                                                className="w-full px-3 py-2 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-sm font-mono text-gray-900 dark:text-base-content focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                                {t('proxy.config.hub.cl_label', { defaultValue: 'Piper 构建编号 (CL)' })}
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={formData.proxy?.hub_cl || ''}
-                                                onChange={(e) => {
-                                                    const c = e.target.value.trim();
-                                                    setFormData({
-                                                        ...formData,
-                                                        proxy: {
-                                                            ...formData.proxy,
-                                                            hub_cl: c || undefined,
-                                                        }
-                                                    });
-                                                }}
-                                                placeholder={hubFingerprint?.cl || '998881661 (自动)'}
-                                                className="w-full px-3 py-2 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-sm font-mono text-gray-900 dark:text-base-content focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                            />
-                                        </div>
-                                    </div>
-                                    {/* 官方新版本可用提示 Banner */}
-                                    {hubFingerprint?.update_available && hubFingerprint.latest_remote_version && (
-                                        <div className="mt-3 bg-amber-50/60 dark:bg-amber-900/20 border border-amber-200/60 dark:border-amber-800/30 rounded-lg p-2.5 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
-                                            <span className="leading-relaxed">
-                                                {t('proxy.config.hub.banner_newer_available', {
-                                                    latest: hubFingerprint.latest_remote_version,
-                                                    defaultValue: `💡 检测到官方 Hub 已发布新版本 v${hubFingerprint.latest_remote_version}。更新本地官方客户端后点击「动态探测」，可自动提取并同步最新 CL。`
-                                                })}
-                                            </span>
-                                        </div>
-                                    )}
-
-                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                                        {t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })}
-                                    </p>
-                                </div>
-
                                 {/* Antigravity 缓存清理 */}
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-4">
                                     <h3 className="font-medium text-gray-900 dark:text-base-content mb-3">{t('settings.advanced.antigravity_cache_title')}</h3>
@@ -1653,84 +1223,6 @@ function Settings() {
                                         >
                                             {t('settings.advanced.clear_antigravity_cache')}
                                         </button>
-                                    </div>
-                                </div>
-
-
-
-                                <div className="border-t border-gray-200 dark:border-base-200 pt-4">
-                                    <div className="space-y-3">
-                                        <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-lg border border-gray-100 dark:border-base-300">
-                                            <div>
-                                                <div className="font-medium text-gray-900 dark:text-base-content">
-                                                    {t('settings.advanced.debug_logs_title')}
-                                                </div>
-                                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                                                    {t('settings.advanced.debug_logs_enable_desc')}
-                                                </p>
-                                            </div>
-                                            <label className="relative inline-flex items-center cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    className="sr-only peer"
-                                                    checked={formData.proxy?.debug_logging?.enabled ?? false}
-                                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({
-                                                        ...formData,
-                                                        proxy: {
-                                                            ...formData.proxy,
-                                                            debug_logging: {
-                                                                enabled: e.target.checked,
-                                                                output_dir: formData.proxy?.debug_logging?.output_dir,
-                                                            },
-                                                        },
-                                                    })}
-                                                />
-                                                <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                                            </label>
-                                        </div>
-                                        {(formData.proxy?.debug_logging?.enabled ?? false) && (
-                                            <>
-                                                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-lg p-3">
-                                                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                                                        {t('settings.advanced.debug_logs_desc')}
-                                                    </p>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-medium text-gray-900 dark:text-base-content mb-1">
-                                                        {t('settings.advanced.debug_log_dir')}
-                                                    </label>
-                                                    <div className="flex gap-2">
-                                                        <input
-                                                            type="text"
-                                                            className="flex-1 px-4 py-3 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-gray-900 dark:text-base-content font-medium"
-                                                            value={formData.proxy?.debug_logging?.output_dir || ''}
-                                                            placeholder={`${dataDirPath.replace(/\/$/, '')}/debug_logs`}
-                                                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({
-                                                                ...formData,
-                                                                proxy: {
-                                                                    ...formData.proxy,
-                                                                    debug_logging: {
-                                                                        enabled: formData.proxy?.debug_logging?.enabled ?? false,
-                                                                        output_dir: e.target.value || undefined,
-                                                                    },
-                                                                },
-                                                            })}
-                                                        />
-                                                        {isTauri() && (
-                                                            <button
-                                                                className="px-4 py-2 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-base-200 transition-colors"
-                                                                onClick={handleSelectDebugLogDir}
-                                                            >
-                                                                {t('settings.advanced.select_btn')}
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                                                        {t('settings.advanced.debug_log_dir_hint', { path: dataDirPath.replace(/\/$/, '') })}
-                                                    </p>
-                                                </div>
-                                            </>
-                                        )}
                                     </div>
                                 </div>
 
@@ -1789,41 +1281,7 @@ function Settings() {
                     {/* 代理设置 */}
                     {activeTab === 'proxy' && (
                         <div className="space-y-4 animate-in fade-in duration-300">
-                            <ProxyPoolSettings
-                                config={formData.proxy?.proxy_pool || {
-                                    enabled: false,
-                                    proxies: [],
-                                    health_check_interval: 300,
-                                    auto_failover: true,
-                                    strategy: 'priority'
-                                }}
-                                onChange={(newConfig, silent = false) => {
-                                    const updatedFormData = {
-                                        ...formData,
-                                        proxy: {
-                                            ...formData.proxy,
-                                            proxy_pool: newConfig
-                                        }
-                                    };
-                                    setFormData(updatedFormData);
-
-                                    // [FIX] Silent updates (like health polling) should NOT trigger saveConfig
-                                    // to prevent race conditions where old memory state rolls back new manual changes
-                                    if (silent) {
-                                        console.log('Proxy status sync (silent)');
-                                        return;
-                                    }
-
-                                    // Hot reload: save immediately for manual changes
-                                    saveConfig({ ...updatedFormData, auto_refresh: true })
-                                        .then(() => {
-                                            console.log('Proxy config saved');
-                                        })
-                                        .catch(err => console.error('Save failed:', err));
-                                }}
-                            />
-
-                            {/* [FIX #1701] 恢复全局上游代理设置 */}
+                            {/* 全局基础网络代理设置 */}
                             <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-blue-200 transition-all duration-300 shadow-sm relative overflow-hidden">
                                 <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 -mr-12 -mt-12 rounded-full blur-2xl group-hover:bg-blue-500/10 transition-colors"></div>
                                 <div className="flex items-center justify-between mb-5 relative z-10">
@@ -1894,47 +1352,6 @@ function Settings() {
                                         </div>
                                     </div>
                                 )}
-                            </div>
-
-                            {/* 遇到限流账号自动进小黑屋 (QoS 降速熔断) 开关 */}
-                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-amber-200 transition-all duration-300 shadow-sm relative overflow-hidden">
-                                <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 -mr-12 -mt-12 rounded-full blur-2xl group-hover:bg-amber-500/10 transition-colors"></div>
-                                <div className="flex items-center justify-between relative z-10">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-sm">
-                                            <ShieldAlert size={18} />
-                                        </div>
-                                        <div>
-                                            <div className="font-bold text-gray-900 dark:text-gray-100 text-sm">
-                                                {t('dashboard.qos_auto_jail', '自动小黑屋')} (QoS)
-                                            </div>
-                                            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight max-w-[340px]">
-                                                {t('dashboard.qos_auto_jail_enabled_tip', '开启后遇响应过长的限速账号将自动隔离并解绑会话；关闭时直接忽略校验时长。')}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer scale-90">
-                                        <input
-                                            type="checkbox"
-                                            className="sr-only peer"
-                                            checked={formData.proxy?.qos_auto_jail ?? false}
-                                            onChange={(e) => {
-                                                const nextVal = e.target.checked;
-                                                const updated = {
-                                                    ...formData,
-                                                    proxy: {
-                                                        ...formData.proxy,
-                                                        qos_auto_jail: nextVal,
-                                                    },
-                                                };
-                                                setFormData(updated);
-                                                saveConfig({ ...updated, auto_refresh: true })
-                                                    .catch(err => console.error('Save failed:', err));
-                                            }}
-                                        />
-                                        <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500 shadow-inner"></div>
-                                    </label>
-                                </div>
                             </div>
                         </div>
                     )}

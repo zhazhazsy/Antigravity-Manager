@@ -166,18 +166,6 @@ jobs:
           Write-Host "Prerelease version detected; MSI (WiX) cannot bundle SemVer prerelease versions. Falling back to NSIS only."
           "PRE_BUNDLE_ARGS=--bundles nsis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      # Universal macOS app: pre-build and lipo secondary binaries so Tauri's bundler finds them
-      - name: Build universal secondary binaries
-        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'universal-apple-darwin')
-        run: |
-          npm run build
-          cargo build --release --target aarch64-apple-darwin --bin antigravity-server --manifest-path src-tauri/Cargo.toml
-          cargo build --release --target x86_64-apple-darwin --bin antigravity-server --manifest-path src-tauri/Cargo.toml
-          mkdir -p src-tauri/target/universal-apple-darwin/release
-          lipo -create -output src-tauri/target/universal-apple-darwin/release/antigravity-server \
-            src-tauri/target/aarch64-apple-darwin/release/antigravity-server \
-            src-tauri/target/x86_64-apple-darwin/release/antigravity-server
-
       - name: Build the app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -282,56 +270,8 @@ jobs:
             src-tauri/target/**/release/bundle/rpm/*.sig
           if-no-files-found: warn
 
-  # Android ARM64 原生 Termux Headless 服务端构建与打包
-  build-android-arm64:
-    name: Build Android ARM64 Server (Termux)
-    needs: verify-release-target
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26d
-          add-to-path: true
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Build frontend
-        run: |
-          npm install --legacy-peer-deps
-          npm run build
-
-      - name: Build Android ARM64 headless server binary
-        run: |
-          cd src-tauri
-          cargo ndk -t arm64-v8a build --release --bin antigravity-server
-
-      - name: Package Android ARM64 artifact
-        run: |
-          mkdir -p dist-android
-          cp src-tauri/target/aarch64-linux-android/release/antigravity-server dist-android/
-          cp -r dist dist-android/dist
-          tar -czvf antigravity-server-android-arm64.tar.gz -C dist-android antigravity-server dist
-
-      - name: Upload Release Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-assets-android
-          path: antigravity-server-android-arm64.tar.gz
-          if-no-files-found: error
-
   publish-release:
-    needs: [verify-release-target, build-tauri, build-android-arm64]
+    needs: [verify-release-target, build-tauri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -489,10 +429,6 @@ jobs:
           \) -print0 | while IFS= read -r -d '' file; do
             cp "$file" release-files/
           done
-          # 包含 Termux 一键安装脚本
-          if [ -f scripts/install-termux.sh ]; then
-            cp scripts/install-termux.sh release-files/
-          fi
           # 同步生成点号规范命名的副本，确保与 updater.json 中的下载 URL 100% 绝对一致
           cd release-files
           for f in *\ *; do
@@ -534,120 +470,3 @@ jobs:
           replacesArtifacts: true
           prerelease: true
           makeLatest: false
-
-  docker-build-amd64:
-    needs: verify-release-target
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # 预发布 Tag (含 '-') 不更新 latest-amd64，与 GitHub Release 的 Pre-release 守卫同一语义
-      - name: Resolve Docker tags (AMD64)
-        env:
-          VER: ${{ needs.verify-release-target.outputs.release_tag }}
-          IS_PRE: ${{ needs.verify-release-target.outputs.is_prerelease }}
-        run: |
-          OWNER="${{ github.repository_owner }}"
-          TAGS="${OWNER}/antigravity-manager:${VER}-amd64"
-          if [[ "$IS_PRE" != "true" ]]; then
-            TAGS="${TAGS}"$'\n'"${OWNER}/antigravity-manager:latest-amd64"
-          fi
-          {
-            echo "DOCKER_TAGS<<EOF"
-            echo "$TAGS"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
-
-      - name: Build and push (AMD64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.DOCKER_TAGS }}
-          build-args: |
-            USE_MIRROR=false
-
-  docker-build-arm64:
-    needs: verify-release-target
-    runs-on: ubuntu-24.04-arm
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # 预发布 Tag (含 '-') 不更新 latest-arm64，与 GitHub Release 的 Pre-release 守卫同一语义
-      - name: Resolve Docker tags (ARM64)
-        env:
-          VER: ${{ needs.verify-release-target.outputs.release_tag }}
-          IS_PRE: ${{ needs.verify-release-target.outputs.is_prerelease }}
-        run: |
-          OWNER="${{ github.repository_owner }}"
-          TAGS="${OWNER}/antigravity-manager:${VER}-arm64"
-          if [[ "$IS_PRE" != "true" ]]; then
-            TAGS="${TAGS}"$'\n'"${OWNER}/antigravity-manager:latest-arm64"
-          fi
-          {
-            echo "DOCKER_TAGS<<EOF"
-            echo "$TAGS"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
-
-      - name: Build and push (ARM64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ env.DOCKER_TAGS }}
-          build-args: |
-            USE_MIRROR=false
-
-  docker-manifest:
-    needs: [verify-release-target, docker-build-amd64, docker-build-arm64]
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
-    steps:
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create and push manifest
-        env:
-          VER: ${{ needs.verify-release-target.outputs.release_tag }}
-          IS_PRE: ${{ needs.verify-release-target.outputs.is_prerelease }}
-        run: |
-          docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:${VER} \
-            ${{ github.repository_owner }}/antigravity-manager:${VER}-amd64 \
-            ${{ github.repository_owner }}/antigravity-manager:${VER}-arm64
-
-          # 预发布 Tag (含 '-') 不更新 latest，避免预发布镜像进入正式更新通道
-          if [[ "$IS_PRE" != "true" ]]; then
-            docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:latest \
-              ${{ github.repository_owner }}/antigravity-manager:latest-amd64 \
-              ${{ github.repository_owner }}/antigravity-manager:latest-arm64
-          fi

@@ -36,29 +36,24 @@ import {
     ArrowUpDown,
     ArrowUp,
     ArrowDown,
-    Zap,
-    Power,
     MoreHorizontal,
     BookCopy,
     Check,
     Trash2,
     X,
 } from 'lucide-react';
-import { type Account, type ActiveClientsStatus, getAccountTier, getEffectiveModelPriority, hasAccountFlagshipCapability, hasCustomModelPriorities } from '../../types/account';
+import { type Account, type ActiveClientsStatus, getAccountTier, hasAccountFlagshipCapability } from '../../types/account';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../utils/cn';
 
-import { useConfigStore } from '../../stores/useConfigStore';
 import { useAccountStore } from '../../stores/useAccountStore';
-import { usePedalModeStore } from '../../stores/usePedalModeStore';
 import { GroupQuotaCard } from './GroupQuotaCard';
 import { getGroupQuotaSummaries } from '../../utils/quotaDisplay';
 import { getValidationBlockedStatusLabel } from './accountValidationStatus';
 import { showToast } from '../common/ToastContainer';
-import { exportAccounts, releaseAccountQoSJail } from '../../services/accountService';
+import { exportAccounts } from '../../services/accountService';
 import { copyToClipboard } from '../../utils/clipboard';
 import AccountSwitchMenu from './AccountSwitchMenu';
-import { QoSStatusBadge } from './QoSStatusBadge';
 import { getLiveLimitForModel } from '../../utils/liveLimit';
 import { isValidationBlockActive } from '../../utils/accountStatus';
 import { parseTags } from '../../utils/tagUtils';
@@ -80,11 +75,9 @@ interface AccountTableProps {
     switchingAccountId: string | null;
     onSwitch: (accountId: string, targetIde?: string) => void;
     onRefresh: (accountId: string) => void;
-    onViewDevice: (accountId: string) => void;
     onViewDetails: (accountId: string) => void;
     onExport: (accountId: string) => void;
     onDelete: (accountId: string) => void;
-    onToggleProxy: (accountId: string) => void;
     onWarmup?: (accountId: string) => void;
     onUpdateLabel?: (accountId: string, label: string) => void;
     /** 拖拽排序回调，当用户完成拖拽时触发 */
@@ -103,11 +96,9 @@ interface SortableRowProps {
     onSelect: () => void;
     onSwitch: (targetIde?: string) => void;
     onRefresh: () => void;
-    onViewDevice: () => void;
     onViewDetails: () => void;
     onExport: () => void;
     onDelete: () => void;
-    onToggleProxy: () => void;
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
@@ -123,11 +114,9 @@ interface AccountRowContentProps {
     isDisabled: boolean;
     onSwitch: (targetIde?: string) => void;
     onRefresh: () => void;
-    onViewDevice: () => void;
     onViewDetails: () => void;
     onExport: () => void;
     onDelete: () => void;
-    onToggleProxy: () => void;
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
@@ -136,17 +125,6 @@ interface AccountRowContentProps {
 // ============================================================================
 // 辅助函数
 // ============================================================================
-
-function isGroupProtected(protectedModels: string[] | undefined, groupKey: 'gemini' | 'claude' | 'argon'): boolean {
-    if (!protectedModels || protectedModels.length === 0) return false;
-    if (groupKey === 'argon') {
-        return protectedModels.some(isFlagshipModel);
-    } else if (groupKey === 'gemini') {
-        return protectedModels.some(m => m.toLowerCase().startsWith('gemini') && !isFlagshipModel(m));
-    } else {
-        return protectedModels.some(m => m.toLowerCase().startsWith('claude') || m.toLowerCase().startsWith('gpt'));
-    }
-}
 
 /**
  * 提取账号的最快配额重置时间（毫秒时间戳）
@@ -201,11 +179,9 @@ function SortableAccountRow({
     onSelect,
     onSwitch,
     onRefresh,
-    onViewDevice,
     onViewDetails,
     onExport,
     onDelete,
-    onToggleProxy,
     onWarmup,
     onUpdateLabel,
     onViewError,
@@ -234,20 +210,15 @@ function SortableAccountRow({
     const isAcp = activeClients?.acp_account_id === account.id;
     const isRowCurrent = isCurrent || isClassic || isIde || isAgy || isAcp;
 
-    const { active: isPedalActive, targetAccountIds } = usePedalModeStore();
-    const isPedaling = isPedalActive && targetAccountIds.includes(account.id);
-
     return (
         <tr
             ref={setNodeRef}
             style={style as React.CSSProperties}
             className={cn(
                 "group transition-colors border-b border-gray-100 dark:border-base-200",
-                isPedaling && "bg-amber-50/50 dark:bg-amber-950/20 border-l-4 border-l-amber-500",
-                !isPedaling && isRowCurrent && "bg-blue-50/50 dark:bg-blue-900/10",
+                isRowCurrent && "bg-blue-50/50 dark:bg-blue-900/10",
                 isDragging && "bg-blue-100 dark:bg-blue-900/30 shadow-lg",
-                !isDragging && !isPedaling && "hover:bg-gray-50 dark:hover:bg-base-200",
-                !isDragging && isPedaling && "hover:bg-amber-50/80 dark:hover:bg-amber-950/30"
+                !isDragging && "hover:bg-gray-50 dark:hover:bg-base-200"
             )}
         >
             {/* 拖拽手柄 */}
@@ -285,11 +256,9 @@ function SortableAccountRow({
                 isDisabled={Boolean(account.disabled)}
                 onSwitch={onSwitch}
                 onRefresh={onRefresh}
-                onViewDevice={onViewDevice}
                 onViewDetails={onViewDetails}
                 onExport={onExport}
                 onDelete={onDelete}
-                onToggleProxy={onToggleProxy}
                 onWarmup={onWarmup}
                 onUpdateLabel={onUpdateLabel}
                 onViewError={onViewError}
@@ -311,19 +280,14 @@ function AccountRowContent({
     isDisabled,
     onSwitch,
     onRefresh,
-    onViewDevice,
     onViewDetails,
     onExport,
     onDelete,
-    onToggleProxy,
     onWarmup,
     onUpdateLabel,
     onViewError,
 }: AccountRowContentProps) {
     const { t } = useTranslation();
-    const { config } = useConfigStore();
-    const { active: isPedalActive, targetAccountIds } = usePedalModeStore();
-    const isPedaling = isPedalActive && targetAccountIds.includes(account.id);
     const isValidationBlocked = isValidationBlockActive(account);
     const validationBlockedLabel = getValidationBlockedStatusLabel(account.validation_blocked_reason, t);
     const isBanned = Boolean(account.banned);
@@ -358,19 +322,6 @@ function AccountRowContent({
     const isRowActive = isCurrent || isClassic || isIde || isAgy || isAcp;
 
     const tags = useMemo(() => parseTags(account.custom_label), [account.custom_label]);
-
-    const handleReleaseJail = async () => {
-        try {
-            await releaseAccountQoSJail(account.id);
-            showToast(t('accounts.qos.release_success', '已解除该账号的小黑屋限制'), 'success');
-            // 解除小黑屋只影响运行时 QoS 状态，与配额无关：直接重拉账号列表立即回显。
-            // 若复用 onRefresh 的配额刷新链路，上游 429/503 时 fetchAccountQuota 会抛错，
-            // 列表刷新被跳过，界面上的「限速小黑屋中」徽章就会一直残留。
-            await useAccountStore.getState().fetchAccounts();
-        } catch (err: any) {
-            showToast(err?.message || '解除失败', 'error');
-        }
-    };
 
     const tier = useMemo(() => getAccountTier(account), [account]);
     const groupSummaries = useMemo(() => {
@@ -483,15 +434,6 @@ function AccountRowContent({
                             </span>
                         )}
 
-                        {account.proxy_disabled && !isDisabled && !isBanned && (
-                            <span
-                                className="px-2 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
-                            >
-                                <Ban className="w-2.5 h-2.5" />
-                                <span>{t('accounts.proxy_disabled')}</span>
-                            </span>
-                        )}
-
                         {account.quota?.is_forbidden && !isBanned && (
                             <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-red-200/50">
                                 <Lock className="w-2.5 h-2.5" />
@@ -525,12 +467,6 @@ function AccountRowContent({
                                 </button>
                             ))
                         )}
-                        <QoSStatusBadge
-                            status={account.qos_status}
-                            resetSeconds={account.qos_reset_seconds}
-                            size="md"
-                            onRelease={handleReleaseJail}
-                        />
 
 
                         {/* 订阅类型徽章 */}
@@ -566,36 +502,6 @@ function AccountRowContent({
                                 );
                             }
                         })()}
-                        {/* 蹬额度中高亮徽章 */}
-                        {isPedaling && (
-                            <span
-                                className="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px] font-bold flex items-center gap-1 shadow-xs border border-amber-500/40 animate-pulse motion-reduce:animate-none"
-                                title={t('pedal.account_pedaling_tooltip', '该账号当前处于蹬额度模式，已被设为最高调度优先级 (priority = 1)')}
-                            >
-                                <Zap className="w-2.5 h-2.5 fill-current text-amber-500" />
-                                {t('pedal.account_pedaling_badge', '⚡ 蹬额度中')}
-                            </span>
-                        )}
-                        {/* 优先级 */}
-                        <span
-                            className={cn(
-                                "px-2 py-0.5 rounded-md text-[10px] font-bold",
-                                isPedaling
-                                    ? "bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-300/80 dark:border-amber-700/80 shadow-2xs"
-                                    : hasCustomModelPriorities(account)
-                                        ? "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50"
-                                        : "bg-gray-100 dark:bg-base-300 text-gray-500 dark:text-gray-400"
-                            )}
-                            title={
-                                hasCustomModelPriorities(account)
-                                    ? `Gemini: ${getEffectiveModelPriority(account, 'gemini')} | Claude: ${getEffectiveModelPriority(account, 'claude')} (${t('accounts.priority')}: ${account.priority ?? 50})`
-                                    : t('accounts.priority_hint')
-                            }
-                        >
-                            {hasCustomModelPriorities(account)
-                                ? `${t('accounts.priority')}: G:${getEffectiveModelPriority(account, 'gemini')} · C:${getEffectiveModelPriority(account, 'claude')}`
-                                : `${t('accounts.priority')}: ${account.priority ?? 50}`}
-                        </span>
                         {/* 多标签平铺渲染 (最多显示 2 个，超出的显示 +N 徽章) */}
                         {tags.length > 0 && (
                             <>
@@ -685,7 +591,6 @@ function AccountRowContent({
                                 <GroupQuotaCard
                                     key={summary.key}
                                     summary={summary}
-                                    isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, summary.key))}
                                     liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
                                     compact
                                 />
@@ -698,7 +603,6 @@ function AccountRowContent({
                                 <div className="w-full pt-0.5">
                                     <GroupQuotaCard
                                         summary={argon}
-                                        isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, 'argon'))}
                                         liveLimit={getLiveLimitForModel(account, 'gemini-4-neon') || getLiveLimitForModel(account, 'gemini-4-argon')}
                                         compact
                                         fullWidth
@@ -724,14 +628,14 @@ function AccountRowContent({
 
             {/* 操作列 */}
             <td className={cn(
-                "px-1 py-1 sticky right-0 w-[136px] min-w-[136px] max-w-[136px] z-10 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center align-middle",
+                "px-1 py-1 sticky right-0 w-[180px] min-w-[180px] max-w-[180px] z-10 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center align-middle",
                 // 动态背景色处理
                 isCurrent
                     ? "bg-[#f1f6ff] dark:bg-[#1e2330]" // 接近 blue-50/50 的实色
                     : "bg-white dark:bg-base-100",
                 !isCurrent && "group-hover:bg-gray-50 dark:group-hover:bg-base-200"
             )}>
-                <div className="grid grid-cols-2 gap-1 w-full max-w-[128px] mx-auto">
+                <div className="grid grid-cols-3 gap-1 w-full max-w-[172px] mx-auto">
                     {/* 1. 切换（点击向上展开 4 个客户端微标选项） */}
                     <AccountSwitchMenu
                         accountId={account.id}
@@ -758,27 +662,7 @@ function AccountRowContent({
                         <span className="truncate">{t('accounts.action_refresh', '刷新')}</span>
                     </button>
 
-                    {/* 3. 启停 */}
-                    <button
-                        className={cn(
-                            "flex items-center justify-center gap-0.5 px-1 py-1 rounded-lg text-xs font-semibold transition-all shadow-xs",
-                            isBanned
-                                ? "bg-gray-100 dark:bg-base-200 text-gray-400 dark:text-gray-500 cursor-not-allowed border border-gray-200 dark:border-base-300"
-                                : account.proxy_disabled
-                                    ? "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 border border-amber-200/60 dark:border-amber-800/40 active:scale-95"
-                                    : "bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/40 border border-teal-200/60 dark:border-teal-800/40 active:scale-95"
-                        )}
-                        onClick={(e) => { e.stopPropagation(); onToggleProxy(); }}
-                        disabled={isBanned}
-                        title={isBanned ? t('accounts.banned_tooltip', '账号已被上游封禁（违反服务条款），请提交申诉') : (account.proxy_disabled ? t('accounts.enable_proxy') : t('accounts.disable_proxy'))}
-                    >
-                        <Power className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">
-                            {account.proxy_disabled ? t('accounts.action_enable', '启用') : t('accounts.action_disable', '停用')}
-                        </span>
-                    </button>
-
-                    {/* 4. 更多 */}
+                    {/* 3. 更多 */}
                     <button
                         className="flex items-center justify-center gap-0.5 px-1 py-1 rounded-lg text-xs font-semibold transition-all shadow-xs bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-base-300 border border-gray-200 dark:border-base-300 active:scale-95"
                         onClick={(e) => { e.stopPropagation(); setIsActionsModalOpen(true); }}
@@ -796,10 +680,6 @@ function AccountRowContent({
                     account={account}
                     onSwitch={(target) => onSwitch(target)}
                     onWarmup={onWarmup}
-                    onViewDevice={() => {
-                        setIsActionsModalOpen(false);
-                        onViewDevice();
-                    }}
                     onViewDetails={() => {
                         setIsActionsModalOpen(false);
                         onViewDetails();
@@ -837,11 +717,9 @@ function AccountTable({
     switchingAccountId,
     onSwitch,
     onRefresh,
-    onViewDevice,
     onViewDetails,
     onExport,
     onDelete,
-    onToggleProxy,
     onReorder,
     onWarmup,
     onUpdateLabel,
@@ -1045,7 +923,7 @@ function AccountTable({
                                     )}
                                 </button>
                             </th>
-                            <th className="px-1 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap sticky right-0 w-[136px] min-w-[136px] max-w-[136px] bg-gray-50 dark:bg-base-200 z-20 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center">{t('accounts.table.actions')}</th>
+                            <th className="px-1 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap sticky right-0 w-[180px] min-w-[180px] max-w-[180px] bg-gray-50 dark:bg-base-200 z-20 shadow-[-12px_0_12px_-12px_rgba(0,0,0,0.1)] dark:shadow-[-12px_0_12px_-12px_rgba(255,255,255,0.05)] text-center">{t('accounts.table.actions')}</th>
                         </tr >
                     </thead >
                     <SortableContext items={accountIds} strategy={verticalListSortingStrategy}>
@@ -1063,11 +941,9 @@ function AccountTable({
                                     onSelect={() => onToggleSelect(account.id)}
                                     onSwitch={(targetIde?: string) => onSwitch(account.id, targetIde)}
                                     onRefresh={() => onRefresh(account.id)}
-                                    onViewDevice={() => onViewDevice(account.id)}
                                     onViewDetails={() => onViewDetails(account.id)}
                                     onExport={() => onExport(account.id)}
                                     onDelete={() => onDelete(account.id)}
-                                    onToggleProxy={() => onToggleProxy(account.id)}
                                     onWarmup={onWarmup ? () => onWarmup(account.id) : undefined}
                                     onUpdateLabel={onUpdateLabel ? (label: string) => onUpdateLabel(account.id, label) : undefined}
                                     onViewError={() => onViewError(account.id)}
@@ -1107,11 +983,9 @@ function AccountTable({
                                         isSwitching={activeAccount.id === switchingAccountId}
                                         onSwitch={() => { }}
                                         onRefresh={() => { }}
-                                        onViewDevice={() => { }}
                                         onViewDetails={() => { }}
                                         onExport={() => { }}
                                         onDelete={() => { }}
-                                        onToggleProxy={() => { }}
                                         isDisabled={Boolean(activeAccount.disabled)}
                                         onViewError={() => { }}
                                     />

@@ -1,5 +1,5 @@
 use crate::models::Account;
-use crate::modules::{db, device, process, version};
+use crate::modules::{db, process, version};
 use std::fs;
 // Command 仅用于 macos/Linux 分支（security / secret-tool / kill），Windows 裁剪不导入以免 unused
 #[cfg(not(windows))]
@@ -107,14 +107,7 @@ fn apply_account_credentials(
             "[Desktop] Target is Antigravity IDE (VS Code architecture); performing dual write (SQLite state.vscdb + system Keyring + file fallback).",
         );
 
-        // 1.1 获取存储路径并写入设备 Profile
-        if let Ok(storage_path) = device::get_storage_path(effective_target) {
-            if let Some(ref profile) = account.device_profile {
-                let _ = device::write_profile(&storage_path, profile);
-            }
-        }
-
-        // 1.2 注入 SQLite 数据库 (state.vscdb)
+        // 1.1 注入 SQLite 数据库 (state.vscdb)
         let db_path = db::get_db_path(effective_target)?;
         if db_path.exists() {
             let backup_path = db_path.with_extension("vscdb.backup");
@@ -134,11 +127,7 @@ fn apply_account_credentials(
             effective_target,
         )?;
 
-        if let Some(ref profile) = account.device_profile {
-            let _ = db::write_service_machine_id(&db_path, &profile.mac_machine_id);
-        }
-
-        // 1.3 同步写入系统 Keyring (针对 IDE 2.6.0+ agy 后台语言服务鉴权真理源)
+        // 1.2 同步写入系统 Keyring (针对 IDE 2.6.0+ agy 后台语言服务鉴权真理源)
         if let Err(keyring_err) = write_to_system_keyring(account) {
             crate::modules::logger::log_warn(&format!(
                 "[Desktop] Warning: Failed to write system Keyring for IDE: {}",
@@ -204,14 +193,7 @@ fn apply_account_credentials(
     }
 
     // ================== Antigravity 经典版/原生应用逻辑 ==================
-    // 2.1 写入设备 Profile (若 storage_path 可解析)
-    if let Ok(storage_path) = device::get_storage_path(effective_target) {
-        if let Some(ref profile) = account.device_profile {
-            let _ = device::write_profile(&storage_path, profile);
-        }
-    }
-
-    // 2.2 双写同步：若经典版存储路径下存在 SQLite state.vscdb，执行数据库 Token 注入
+    // 2.1 双写同步：若经典版存储路径下存在 SQLite state.vscdb，执行数据库 Token 注入
     // 确保原生桌面端与扩展会话状态在所有 Antigravity 变体中保持严格一致 (Fixes #3829)
     let mut sqlite_injected = false;
     let mut sqlite_err_opt = None;
@@ -238,9 +220,6 @@ fn apply_account_credentials(
             ) {
                 Ok(_) => {
                     sqlite_injected = true;
-                    if let Some(ref profile) = account.device_profile {
-                        let _ = db::write_service_machine_id(db_path, &profile.mac_machine_id);
-                    }
                 }
                 Err(e) => {
                     crate::modules::logger::log_warn(&format!(
@@ -329,12 +308,6 @@ impl SystemIntegration for DesktopIntegration {
             // will read this account from the system credential store.
             let stored = read_from_system_keyring_only()?;
             verify_agy_credentials(&account.token.refresh_token, &stored.refresh_token)?;
-
-            if let Ok(storage_path) = device::get_storage_path(target_ide) {
-                if let Some(ref profile) = account.device_profile {
-                    let _ = device::write_profile(&storage_path, profile);
-                }
-            }
 
             let is_running = process::is_process_running_by_name("agy");
             let msg = if is_running {
@@ -1691,12 +1664,6 @@ impl SystemIntegration for CliIntegration {
             let _ = write_to_file_credentials(account, true);
             let stored = read_from_system_keyring_only()?;
             verify_agy_credentials(&account.token.refresh_token, &stored.refresh_token)?;
-
-            if let Ok(storage_path) = device::get_storage_path(target_ide) {
-                if let Some(ref profile) = account.device_profile {
-                    let _ = device::write_profile(&storage_path, profile);
-                }
-            }
             return Ok(());
         }
 

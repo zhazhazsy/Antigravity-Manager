@@ -1,4 +1,4 @@
-import { Gemini, Claude, OpenAI } from '@lobehub/icons';
+import { Gemini, Claude, OpenAI } from '../components/common/BrandIcons';
 
 /**
  * 模型配置接口

@@ -6,8 +6,6 @@ import {
   List,
   Search,
   Sparkles,
-  ToggleLeft,
-  ToggleRight,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -17,7 +15,6 @@ import AccountGrid from "../components/accounts/AccountGrid";
 import AccountTable from "../components/accounts/AccountTable";
 import AddAccountDialog from "../components/accounts/AddAccountDialog";
 import RefreshMenuControl from "../components/accounts/RefreshMenuControl";
-import DeviceFingerprintDialog from "../components/accounts/DeviceFingerprintDialog";
 import ModalDialog from "../components/common/ModalDialog";
 import Pagination from "../components/common/Pagination";
 import AccountErrorDialog from "../components/accounts/AccountErrorDialog";
@@ -28,7 +25,6 @@ import { useConfigStore } from "../stores/useConfigStore";
 import { Account, getAccountTier, ImportAccountEntry } from "../types/account";
 import { isAccountAbnormal } from "../utils/accountStatus";
 import { cn } from "../utils/cn";
-import { isTauri } from "../utils/env";
 import { request as invoke } from "../utils/request";
 import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
@@ -54,12 +50,10 @@ function Accounts() {
     switchAccount,
     loading,
     refreshQuota,
-    toggleProxyStatus,
     reorderAccounts,
     warmUpAccounts,
     warmUpAccount,
     updateAccountLabel,
-    updateAccountPriority,
     updateAccountProjectId,
     autoFetchAccountProjectId,
   } = useAccountStore();
@@ -78,18 +72,16 @@ function Accounts() {
   // [NEW #3726] 监听后端批量导入流式进度事件
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    if (isTauri()) {
-      import('@tauri-apps/api/event').then(({ listen }) => {
-        listen<{ current: number; total: number; success: number; failed: number; current_email?: string }>(
-          'accounts://import-progress',
-          (event) => {
-            setImportProgress(event.payload);
-          }
-        ).then((unsub) => {
-          unlisten = unsub;
-        });
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<{ current: number; total: number; success: number; failed: number; current_email?: string }>(
+        'accounts://import-progress',
+        (event) => {
+          setImportProgress(event.payload);
+        }
+      ).then((unsub) => {
+        unlisten = unsub;
       });
-    }
+    });
     return () => {
       if (unlisten) unlisten();
     };
@@ -116,7 +108,6 @@ function Accounts() {
     }
   }, [location.state]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [deviceAccount, setDeviceAccount] = useState<Account | null>(null);
   const [detailsAccount, setDetailsAccount] = useState<Account | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isBatchDelete, setIsBatchDelete] = useState(false);
@@ -199,7 +190,6 @@ function Accounts() {
     }
   };
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
@@ -458,51 +448,6 @@ function Accounts() {
     }
   };
 
-  const handleToggleProxy = async (accountId: string, currentlyDisabled: boolean) => {
-    try {
-      const nextEnable = currentlyDisabled;
-      await toggleProxyStatus(
-        accountId,
-        nextEnable,
-        nextEnable ? undefined : t("accounts.proxy_disabled_reason_manual"),
-      );
-      showToast(
-        nextEnable
-          ? t("accounts.toast.proxy_enabled_single", { defaultValue: "已启用反代" })
-          : t("accounts.toast.proxy_disabled_single", { defaultValue: "已停用反代" }),
-        "success",
-      );
-    } catch (error) {
-      console.error("[Accounts] Toggle proxy status failed:", error);
-      showToast(`${t("common.error")}: ${error}`, "error");
-    }
-  };
-
-  const handleBatchToggleProxy = async (enable: boolean) => {
-    if (selectedIds.size === 0) return;
-
-    try {
-      const promises = Array.from(selectedIds).map((id) =>
-        toggleProxyStatus(
-          id,
-          enable,
-          enable ? undefined : t("accounts.proxy_disabled_reason_batch"),
-        ),
-      );
-      await Promise.all(promises);
-      showToast(
-        enable
-          ? t("accounts.toast.proxy_enabled", { count: selectedIds.size })
-          : t("accounts.toast.proxy_disabled", { count: selectedIds.size }),
-        "success",
-      );
-      setSelectedIds(new Set());
-    } catch (error) {
-      console.error("[Accounts] Batch toggle proxy status failed:", error);
-      showToast(`${t("common.error")}: ${error}`, "error");
-    }
-  };
-
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRefreshConfirmOpen, setIsRefreshConfirmOpen] = useState(false);
 
@@ -559,8 +504,6 @@ function Accounts() {
           `${t("common.success")}: ${successCount}, ${t("common.error")}: ${failedCount}`,
           "warning",
         );
-        // You might want to show details in a different way, but for toast, keep it simple or use a "view details" action if supported.
-        // For now, simpler toast is better than a huge alert.
         if (details.length > 0) {
           console.warn("Refresh failures:", details);
         }
@@ -594,48 +537,29 @@ function Accounts() {
       const fileName = `antigravity_accounts_${new Date().toISOString().split("T")[0]}.json`;
 
       // 2. Determine Path & Export
-      if (isTauri()) {
-        let path: string | null = null;
-        const { join } = await import("@tauri-apps/api/path");
+      let path: string | null = null;
+      const { join } = await import("@tauri-apps/api/path");
 
-        if (config?.default_export_path) {
-          // Use default path
-          path = await join(config.default_export_path, fileName);
-        } else {
-          // Use Native Dialog
-          const { save } = await import("@tauri-apps/plugin-dialog");
-          path = await save({
-            filters: [
-              {
-                name: "JSON",
-                extensions: ["json"],
-              },
-            ],
-            defaultPath: fileName,
-          });
-        }
-
-        if (!path) return; // Cancelled
-
-        // 3. Write File
-        await invoke("save_text_file", { path, content });
-        showToast(`${t("common.success")} ${path}`, "success");
+      if (config?.default_export_path) {
+        path = await join(config.default_export_path, fileName);
       } else {
-        // Web 模式：使用浏览器下载
-        const blob = new Blob([content], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToast(
-          t("dashboard.toast.export_success", { path: fileName }),
-          "success",
-        );
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        path = await save({
+          filters: [
+            {
+              name: "JSON",
+              extensions: ["json"],
+            },
+          ],
+          defaultPath: fileName,
+        });
       }
+
+      if (!path) return; // Cancelled
+
+      // 3. Write File
+      await invoke("save_text_file", { path, content });
+      showToast(`${t("common.success")} ${path}`, "success");
     } catch (error: any) {
       console.error("Export failed:", error);
       showToast(`${t("common.error")}: ${error}`, "error");
@@ -703,7 +627,7 @@ function Accounts() {
     }
 
     // [FIX #3726] 如果是通过本地文件路径导入，自动创建 <filepath>-backup 备份，确保失败随时可重新导入
-    if (sourcePath && isTauri()) {
+    if (sourcePath) {
       try {
         const backupPath = `${sourcePath}-backup`;
         await invoke("save_text_file", { path: backupPath, content });
@@ -750,49 +674,26 @@ function Accounts() {
   };
 
   const handleImportJson = async () => {
-    if (isTauri()) {
-      try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const selected = await open({
-          multiple: false,
-          filters: [
-            {
-              name: "JSON",
-              extensions: ["json"],
-            },
-          ],
-        });
-        if (!selected || typeof selected !== "string") return;
-
-        const content: string = await invoke("read_text_file", {
-          path: selected,
-        });
-        await processImportData(content, selected);
-      } catch (error) {
-        console.error("Import failed:", error);
-        showToast(t("accounts.import_fail", { error: String(error) }), "error");
-      }
-    } else {
-      // Web 模式: 触发隐藏的 file input
-      fileInputRef.current?.click();
-    }
-  };
-
-  const handleFileChange = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
     try {
-      const content = await file.text();
-      await processImportData(content);
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "JSON",
+            extensions: ["json"],
+          },
+        ],
+      });
+      if (!selected || typeof selected !== "string") return;
+
+      const content: string = await invoke("read_text_file", {
+        path: selected,
+      });
+      await processImportData(content, selected);
     } catch (error) {
       console.error("Import failed:", error);
       showToast(t("accounts.import_fail", { error: String(error) }), "error");
-    } finally {
-      // 重置 input,允许重复选择同一文件
-      event.target.value = "";
     }
   };
 
@@ -800,12 +701,6 @@ function Accounts() {
     const account = accounts.find((a) => a.id === accountId);
     if (account) {
       setDetailsAccount(account);
-    }
-  };
-  const handleViewDevice = (accountId: string) => {
-    const account = accounts.find((a) => a.id === accountId);
-    if (account) {
-      setDeviceAccount(account);
     }
   };
 
@@ -816,15 +711,6 @@ function Accounts() {
       transition={{ duration: 0.2, ease: "easeOut" }}
       className="h-full flex flex-col p-5 gap-4 max-w-7xl mx-auto w-full"
     >
-      {/* 测试按钮 - 在最顶部 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,application/json"
-        style={{ display: "none" }}
-        onChange={handleFileChange}
-      />
-
       {/* 顶部工具栏:搜索、过滤和操作按钮 */}
       <div className="flex-none flex items-center gap-2">
         {/* 搜索框 - 响应式:大屏显示输入框,小屏显示图标 */}
@@ -1044,48 +930,18 @@ function Accounts() {
           <AddAccountDialog onAdd={handleAddAccount} showText={false} />
 
           {selectedIds.size > 0 && (
-            <>
-              <button
-                className="px-2.5 py-2 bg-red-500 text-white text-xs font-medium rounded-lg hover:bg-red-600 transition-colors flex items-center gap-1.5 shadow-sm"
-                onClick={handleBatchDelete}
-                title={t("accounts.delete_selected", {
-                  count: selectedIds.size,
-                })}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">
-                  {t("accounts.delete_selected", { count: selectedIds.size })}
-                </span>
-              </button>
-              <button
-                className="px-2.5 py-2 bg-orange-500 text-white text-xs font-medium rounded-lg hover:bg-orange-600 transition-colors flex items-center gap-1.5 shadow-sm"
-                onClick={() => handleBatchToggleProxy(false)}
-                title={t("accounts.disable_proxy_selected", {
-                  count: selectedIds.size,
-                })}
-              >
-                <ToggleLeft className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">
-                  {t("accounts.disable_proxy_selected", {
-                    count: selectedIds.size,
-                  })}
-                </span>
-              </button>
-              <button
-                className="px-2.5 py-2 bg-green-500 text-white text-xs font-medium rounded-lg hover:bg-green-600 transition-colors flex items-center gap-1.5 shadow-sm"
-                onClick={() => handleBatchToggleProxy(true)}
-                title={t("accounts.enable_proxy_selected", {
-                  count: selectedIds.size,
-                })}
-              >
-                <ToggleRight className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">
-                  {t("accounts.enable_proxy_selected", {
-                    count: selectedIds.size,
-                  })}
-                </span>
-              </button>
-            </>
+            <button
+              className="px-2.5 py-2 bg-red-500 text-white text-xs font-medium rounded-lg hover:bg-red-600 transition-colors flex items-center gap-1.5 shadow-sm"
+              onClick={handleBatchDelete}
+              title={t("accounts.delete_selected", {
+                count: selectedIds.size,
+              })}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">
+                {t("accounts.delete_selected", { count: selectedIds.size })}
+              </span>
+            </button>
           )}
 
           <RefreshMenuControl
@@ -1167,16 +1023,9 @@ function Accounts() {
                 switchingAccountId={switchingAccountId}
                 onSwitch={handleSwitch}
                 onRefresh={handleRefresh}
-                onViewDevice={handleViewDevice}
                 onViewDetails={handleViewDetails}
                 onExport={handleExportOne}
                 onDelete={handleDelete}
-                onToggleProxy={(id) =>
-                  handleToggleProxy(
-                    id,
-                    !!accounts.find((a) => a.id === id)?.proxy_disabled,
-                  )
-                }
                 onReorder={reorderAccounts}
                 onWarmup={handleWarmup}
                 onUpdateLabel={handleUpdateLabel}
@@ -1196,16 +1045,9 @@ function Accounts() {
               switchingAccountId={switchingAccountId}
               onSwitch={handleSwitch}
               onRefresh={handleRefresh}
-              onViewDevice={handleViewDevice}
               onViewDetails={handleViewDetails}
               onExport={handleExportOne}
               onDelete={handleDelete}
-              onToggleProxy={(id) =>
-                handleToggleProxy(
-                  id,
-                  !!accounts.find((a) => a.id === id)?.proxy_disabled,
-                )
-              }
               onWarmup={handleWarmup}
               onUpdateLabel={handleUpdateLabel}
               onViewError={(id: string) => setErrorAccountId(id)}
@@ -1235,13 +1077,8 @@ function Accounts() {
       <AccountDetailsDialog
         account={accounts.find(a => a.id === detailsAccount?.id) || null}
         onClose={() => setDetailsAccount(null)}
-        onUpdatePriority={updateAccountPriority}
         onUpdateProjectId={updateAccountProjectId}
         onAutoFetchProjectId={autoFetchAccountProjectId}
-      />
-      <DeviceFingerprintDialog
-        account={deviceAccount}
-        onClose={() => setDeviceAccount(null)}
       />
 
       <ModalDialog
@@ -1302,17 +1139,17 @@ function Accounts() {
           warmupTargetAccountId
             ? t(
               "accounts.dialog.single_warmup_msg",
-              "确定要为该账号触发预热吗？使用预热功能将通过反向代理发起一次小额 Token 的请求以激活会话与周期。",
+              "确定要为该账号触发预热吗？使用预热功能将直接向模型接口发起一次小额 Token 请求以激活会话与周期。",
             )
             : selectedIds.size > 0
               ? t(
                 "accounts.dialog.batch_warmup_msg",
-                "确定要为选中的 {{count}} 个账号立即触发预热吗？使用预热功能将通过反向代理发起小额 Token 的请求以激活周期。",
+                "确定要为选中的 {{count}} 个账号立即触发预热吗？使用预热功能将直接向模型接口发起小额 Token 请求以激活周期。",
                 { count: selectedIds.size },
               )
               : t(
                 "accounts.dialog.warmup_all_msg",
-                "确定要立即为所有符合条件的账号触发预热任务吗？使用预热功能将通过反向代理发起小额 Token 的请求以激活周期。",
+                "确定要立即为所有符合条件的账号触发预热任务吗？使用预热功能将直接向模型接口发起小额 Token 请求以激活周期。",
               )
         }
         type="confirm"

@@ -477,12 +477,12 @@ pub(crate) fn model_scope_matches(scope: &str, model: &str) -> bool {
     if scope.is_empty() || target.is_empty() {
         return false;
     }
-    let scope_base = crate::proxy::common::model_mapping::strip_tier_suffix(&scope);
-    let target_base = crate::proxy::common::model_mapping::strip_tier_suffix(&target);
+    let scope_base = crate::utils::model_id::strip_tier_suffix(&scope);
+    let target_base = crate::utils::model_id::strip_tier_suffix(&target);
 
     // 生图变体剥离（如 -4k / -2k）
-    let scope_img_base = crate::proxy::common::model_mapping::strip_image_variant_suffix(&scope);
-    let target_img_base = crate::proxy::common::model_mapping::strip_image_variant_suffix(&target);
+    let scope_img_base = crate::utils::model_id::strip_image_variant_suffix(&scope);
+    let target_img_base = crate::utils::model_id::strip_image_variant_suffix(&target);
 
     // 文本模型严禁误伤生图模型：若 target 属于生图但 scope 并不声明生图，不匹配
     let target_is_image = target.contains("image") || target.starts_with("imagen");
@@ -549,12 +549,6 @@ pub struct Account {
     )]
     pub model_priorities: HashMap<String, u8>,
     pub token: TokenData,
-    /// 可选的设备指纹，用于切换账号时固定机器信息
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_profile: Option<DeviceProfile>,
-    /// 设备指纹历史（生成/采集时记录），不含基线
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub device_history: Vec<DeviceProfileVersion>,
     pub quota: Option<QuotaData>,
     /// Disabled accounts are ignored by the proxy token pool (e.g. revoked refresh_token -> invalid_grant).
     #[serde(default)]
@@ -650,8 +644,6 @@ impl Account {
             priority: default_priority(),
             model_priorities: HashMap::new(),
             token,
-            device_profile: None,
-            device_history: Vec::new(),
             quota: None,
             disabled: false,
             disabled_reason: None,
@@ -969,26 +961,6 @@ impl Default for AccountIndex {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// 设备指纹（storage.json 中 telemetry 相关字段）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceProfile {
-    pub machine_id: String,
-    pub mac_machine_id: String,
-    pub dev_device_id: String,
-    pub sqm_id: String,
-}
-
-/// 指纹历史版本
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceProfileVersion {
-    pub id: String,
-    pub created_at: i64,
-    pub label: String,
-    pub profile: DeviceProfile,
-    #[serde(default)]
-    pub is_current: bool,
 }
 
 /// 导出账号项（用于备份/迁移）

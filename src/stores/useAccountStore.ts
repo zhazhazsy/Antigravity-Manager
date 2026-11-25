@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Account, ActiveClientsStatus, ModelPriorities } from '../types/account';
+import { Account, ActiveClientsStatus } from '../types/account';
 import * as accountService from '../services/accountService';
 
 interface AccountState {
@@ -30,12 +30,10 @@ interface AccountState {
     importFromDb: () => Promise<void>;
     importFromCustomDb: (path: string) => Promise<void>;
     syncAccountFromDb: () => Promise<void>;
-    toggleProxyStatus: (accountId: string, enable: boolean, reason?: string) => Promise<void>;
     clearAccountForbidden: (accountId: string) => Promise<void>;
     warmUpAccounts: () => Promise<string>;
     warmUpAccount: (accountId: string) => Promise<string>;
     updateAccountLabel: (accountId: string, label: string) => Promise<void>;
-    updateAccountPriority: (accountId: string, priority: number, modelPriorities?: ModelPriorities) => Promise<void>;
     updateAccountProjectId: (accountId: string, projectId: string) => Promise<void>;
     autoFetchAccountProjectId: (accountId: string) => Promise<string>;
     removeForbiddenModel: (accountId: string, model?: string) => Promise<boolean>;
@@ -359,16 +357,6 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         }
     },
 
-    toggleProxyStatus: async (accountId: string, enable: boolean, reason?: string) => {
-        try {
-            await accountService.toggleProxyStatus(accountId, enable, reason);
-            await get().fetchAccounts();
-        } catch (error) {
-            console.error('[AccountStore] Toggle proxy status failed:', error);
-            throw error;
-        }
-    },
-
     clearAccountForbidden: async (accountId: string) => {
         try {
             await accountService.clearAccountForbidden(accountId);
@@ -405,51 +393,6 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         } finally {
             await get().fetchAccounts();
         }
-    },
-
-    updateAccountPriority: async (accountId, priority, modelPriorities) => {
-        await accountService.updateAccountPriority(accountId, priority, modelPriorities);
-        const cleanModelPriorities =
-            modelPriorities !== undefined
-                ? Object.fromEntries(
-                      Object.entries(modelPriorities).filter(
-                          ([, v]) => typeof v === 'number' && v >= 1 && v <= 100
-                      )
-                  )
-                : undefined;
-        set(state => ({
-            accounts: state.accounts.map(account =>
-                account.id === accountId
-                    ? {
-                          ...account,
-                          priority,
-                          ...(cleanModelPriorities !== undefined
-                              ? {
-                                    model_priorities:
-                                        Object.keys(cleanModelPriorities).length > 0
-                                            ? cleanModelPriorities
-                                            : undefined,
-                                }
-                              : {}),
-                      }
-                    : account
-            ),
-            currentAccount:
-                state.currentAccount?.id === accountId
-                    ? {
-                          ...state.currentAccount,
-                          priority,
-                          ...(cleanModelPriorities !== undefined
-                              ? {
-                                    model_priorities:
-                                        Object.keys(cleanModelPriorities).length > 0
-                                            ? cleanModelPriorities
-                                            : undefined,
-                                }
-                              : {}),
-                      }
-                    : state.currentAccount,
-        }));
     },
 
     updateAccountProjectId: async (accountId, projectId) => {
