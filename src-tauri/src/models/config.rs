@@ -47,8 +47,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub scheduled_warmup: ScheduledWarmupConfig, // [NEW] Scheduled warmup configuration
     #[serde(default)]
-    pub pinned_quota_models: PinnedQuotaModelsConfig, // [NEW] Pinned quota models list
-    #[serde(default)]
     pub lightweight_mode: bool, // [NEW] Lightweight mode: destroy webview on minimize/close to tray
     #[serde(default)]
     pub auto_switch_classic_depleted: bool, // [NEW] 兼容旧版开关
@@ -113,6 +111,43 @@ impl Default for ScheduledWarmupConfig {
     }
 }
 
+/// Classic auto-switch configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassicAutoSwitchConfig {
+    /// Whether classic auto switch is enabled
+    pub enabled: bool,
+    /// Quota threshold percentage (0-99). Trigger switch when quota <= threshold
+    #[serde(default = "default_classic_auto_switch_threshold")]
+    pub threshold_percentage: u32,
+    /// List of monitored models
+    #[serde(default = "default_classic_monitored_models")]
+    pub monitored_models: Vec<String>,
+}
+
+fn default_classic_auto_switch_threshold() -> u32 {
+    0
+}
+
+fn default_classic_monitored_models() -> Vec<String> {
+    vec!["gemini".to_string(), "claude".to_string()]
+}
+
+impl ClassicAutoSwitchConfig {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            threshold_percentage: 0,
+            monitored_models: default_classic_monitored_models(),
+        }
+    }
+}
+
+impl Default for ClassicAutoSwitchConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppConfig {
     pub fn new() -> Self {
         Self {
@@ -132,7 +167,6 @@ impl AppConfig {
             auto_launch: false,
             quiet_autostart: true,
             scheduled_warmup: ScheduledWarmupConfig::default(),
-            pinned_quota_models: PinnedQuotaModelsConfig::default(),
             lightweight_mode: false,
             auto_switch_classic_depleted: false,
             classic_auto_switch: ClassicAutoSwitchConfig::default(),

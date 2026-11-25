@@ -11,7 +11,7 @@ pub mod utils;
 
 use modules::logger;
 use tauri::Manager;
-use tracing::{error, info, warn};
+use tracing::info;
 
 #[derive(Clone, Copy)]
 struct AppRuntimeFlags {
