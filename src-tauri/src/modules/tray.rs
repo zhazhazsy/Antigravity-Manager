@@ -1,6 +1,6 @@
 use crate::models::quota::ModelQuota;
 use crate::modules;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_os = "android"))]
 use tauri::{
     image::Image,
@@ -13,7 +13,7 @@ use tauri::{menu::Menu, tray::MouseButton};
 
 static MINI_VIEW_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MINI_VIEW_PINNED: AtomicBool = AtomicBool::new(false);
-static LAST_BLUR_TIME: AtomicI64 = AtomicI64::new(0);
+static MINI_POSITIONED: AtomicBool = AtomicBool::new(false);
 static TRAY_SELECTED_ACCOUNT_ID: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
 pub fn set_tray_selected_account_id(account_id: Option<String>) {
@@ -43,23 +43,6 @@ pub fn set_mini_view_active(active: bool) {
 
 pub fn set_mini_view_pinned(pinned: bool) {
     MINI_VIEW_PINNED.store(pinned, Ordering::Relaxed);
-}
-
-pub fn record_blur() {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    LAST_BLUR_TIME.store(now, Ordering::Relaxed);
-}
-
-pub fn is_recent_blur() -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let last = LAST_BLUR_TIME.load(Ordering::Relaxed);
-    (now - last) < 300
 }
 
 pub fn ensure_mini_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
@@ -166,20 +149,42 @@ pub fn open_mini_window(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
         };
 
         const MINI_WIDTH: f64 = 360.0;
-        const MINI_HEIGHT: f64 = 360.0;
-
-        let already_visible = window.is_visible().unwrap_or(false);
+        const MINI_HEIGHT: f64 = 242.0;
 
         let _ = window.set_decorations(false);
         let _ = window.set_resizable(false);
         let _ = window.set_shadow(true);
         let _ = window.set_always_on_top(is_mini_view_pinned());
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-            MINI_WIDTH,
-            MINI_HEIGHT,
-        )));
 
-        if rect.is_some() || !already_visible {
+        let has_valid_custom_pos = if MINI_POSITIONED.load(Ordering::Relaxed) {
+            if let Ok(pos) = window.outer_position() {
+                window
+                    .available_monitors()
+                    .ok()
+                    .map(|monitors| {
+                        monitors.iter().any(|m| {
+                            let mp = m.position();
+                            let ms = m.size();
+                            pos.x >= mp.x - 100
+                                && pos.x < mp.x + ms.width as i32
+                                && pos.y >= mp.y - 40
+                                && pos.y < mp.y + ms.height as i32
+                        })
+                    })
+                    .unwrap_or(true)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !has_valid_custom_pos {
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                MINI_WIDTH,
+                MINI_HEIGHT,
+            )));
+
             let monitor = window.current_monitor().ok().flatten();
             let (mon_x, mon_y, mon_w, mon_h, scale_factor) = if let Some(ref m) = monitor {
                 let pos = m.position();
@@ -249,6 +254,7 @@ pub fn open_mini_window(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
                 win_x as i32,
                 win_y as i32,
             )));
+            MINI_POSITIONED.store(true, Ordering::Relaxed);
         }
 
         // macOS 专属策略：唤起 Mini 视窗时，始终切换为 Accessory 附属模式。
@@ -265,8 +271,7 @@ pub fn open_mini_window(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
     }
 }
 
-/// 处理系统托盘点击事件：实现跨平台现代 Popover（类似腾讯 Lemon / Raycast）
-/// 默认失焦自动收起（除非用户点击图钉进行固定）
+/// 处理系统托盘点击事件：支持左键单击显隐切换，并在重新唤起时保留用户拖动后的位置
 pub fn handle_tray_click(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
     #[cfg(target_os = "android")]
     {
@@ -275,11 +280,6 @@ pub fn handle_tray_click(app: &tauri::AppHandle, rect: Option<tauri::Rect>) {
 
     #[cfg(not(target_os = "android"))]
     {
-        // 1. 最近失焦防抖过滤：若由于点击托盘导致窗口刚失去焦点 (<300ms)，视作自然关闭，避免误重开抖动
-        if is_recent_blur() {
-            return;
-        }
-
         if is_mini_view_active() {
             hide_mini_window(app);
             return;

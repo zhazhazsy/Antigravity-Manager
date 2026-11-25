@@ -753,10 +753,7 @@ pub async fn switch_to_main_window(app: tauri::AppHandle) -> Result<(), String> 
     let _ = app.run_on_main_thread(move || {
         let _ = crate::modules::lightweight::exit_lightweight_mode(&app_handle);
         let _ = app_handle.emit("tray://show-window", ());
-
-        if !crate::modules::tray::is_mini_view_pinned() {
-            crate::modules::tray::hide_mini_window(&app_handle);
-        }
+        crate::modules::tray::hide_mini_window(&app_handle);
     });
     Ok(())
 }
@@ -1119,8 +1116,18 @@ pub async fn exit_app(_app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_mini_view_pinned(pinned: bool) {
+pub fn set_mini_view_pinned(app: tauri::AppHandle, pinned: bool) {
     crate::modules::tray::set_mini_view_pinned(pinned);
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(window) = app.get_webview_window("mini") {
+            let _ = window.set_always_on_top(pinned);
+        }
+    }
 }
 
 #[tauri::command]

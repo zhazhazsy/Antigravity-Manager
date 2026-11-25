@@ -505,11 +505,6 @@ pub fn run() {
                                 .app_handle()
                                 .set_activation_policy(tauri::ActivationPolicy::Regular);
                         }
-                    } else if !focused && window.label() == "mini" {
-                        modules::tray::record_blur();
-                        if !modules::tray::is_mini_view_pinned() && modules::tray::is_mini_view_active() {
-                            modules::tray::hide_mini_window(window.app_handle());
-                        }
                     }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
